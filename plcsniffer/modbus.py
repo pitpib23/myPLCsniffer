@@ -430,6 +430,22 @@ class PassiveSerialReaderThread(QThread):
                     error=str(error),
                 )
 
+    def reset_statistics(self) -> None:
+        """Zero the running frame/request/response/error counters.
+
+        Called from the main thread (see PassiveCaptureService.reset_statistics)
+        when the displayed packet table is cleared, so the footer count matches
+        the now-empty table instead of continuing to show the prior total.
+        """
+        self._counts = {
+            "frames": 0,
+            "requests": 0,
+            "responses": 0,
+            "crc_errors": 0,
+            "unmatched": 0,
+        }
+        self.statistics.emit(dict(self._counts))
+
     def _publish(self, frame: CapturedModbusFrame) -> None:
         self._counts["frames"] += 1
         if frame.frame_type == "Request":

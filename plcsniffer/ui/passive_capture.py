@@ -634,6 +634,13 @@ class PassiveSniffingWidget(QWidget):
         self.function_filter.clear()
         self.function_filter.addItem("All functions", None)
         self._apply_filter()
+        # Reset the footer counter to match the now-empty table. If a
+        # capture is still running, also zero the worker's own running
+        # totals — otherwise the next frame would make the counter jump
+        # right back up to the pre-clear numbers.
+        self.stats_label.setText("Frames 0 · Requests 0 · Responses 0 · Errors 0")
+        self.capture_service.reset_statistics()
+        self.last_frame = None
 
     def copy_selected(self) -> None:
         rows = sorted({index.row() for index in self.message_table.selectedIndexes()})

@@ -145,6 +145,18 @@ class PassiveCaptureService(QObject):
         self.status_changed.emit("Stopping passive capture...")
         worker.stop()
 
+    def reset_statistics(self) -> None:
+        """Zero the active worker's running counters, if any are active.
+
+        Lets the UI clear its packet table and the frame/request/response/
+        error counter together, instead of the counter continuing to show
+        totals from before the clear.
+        """
+        worker = self._worker
+        if worker is None:
+            return
+        worker.reset_statistics()
+
     def shutdown(self, timeout_ms: int = SERIAL_SHUTDOWN_TIMEOUT_MS) -> bool:
         """Stop capture and wait for serial resource cleanup.
 
