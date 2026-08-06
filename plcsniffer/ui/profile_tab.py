@@ -1,0 +1,1292 @@
+from __future__ import annotations
+
+import copy
+import json
+import logging
+import uuid
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from plcsniffer.capture import PassiveCaptureService
+from plcsniffer.config import SERIAL_SHUTDOWN_TIMEOUT_MS, SerialSettings
+from plcsniffer.exceptions import ConfigurationError
+from plcsniffer.logging_config import log_event
+from plcsniffer.modbus import (
+    CapturedModbusFrame,
+    FUNCTION_NAMES,
+    MODICON_BLOCK_OFFSET,
+)
+
+_STATUS_STYLES = {
+    "info": "color: #526174;",
+    "editing": "color: #b45309; font-weight: 600;",
+    "saved": "color: #166534; font-weight: 600;",
+    "warning": "color: #b91c1c; font-weight: 600;",
+}
+
+# Profile Configuration's parity_combo (see _build_config_form) stores the
+# full word ("None"/"Even"/"Odd") rather than the single-letter code
+# SerialSettings/pyserial expect ("N"/"E"/"O", per config.VALID_PARITIES).
+# Only used when opening a serial port for this profile's own sniffing
+# worker — the stored profile value itself is left exactly as-is.
+_PROFILE_PARITY_TO_SERIAL_CODE = {"None": "N", "Even": "E", "Odd": "O"}
+
+# register_table column indices for the two passive-sniffing status columns
+# appended after Description; kept as named constants since _insert_register_row,
+# _refresh_sniff_cells, and _mark_all_rows_sniff_status all need to agree on them.
+_TIMESTAMP_COLUMN = 9
+_STATUS_COLUMN = 10
+
+
+class ProfileTab(QWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.profile_json_path = Path(__file__).resolve().parent.parent / "profile.json"
+        self.profiles: list[dict] = []
+        self.current_profile_id: str | None = None
+        self._ignore_changes = False
+        self._latest_frame: CapturedModbusFrame | None = None
+
+        # Editing workflow state: profiles open read-only; "Edit Profile"
+        # unlocks the form and stashes a snapshot so "Discard Changes" can
+        # restore it. Nothing is written to disk until "Save Profile".
+        self._editing = False
+        self._edit_snapshot: dict | None = None
+
+        # Splitter proportions to restore when the sidebar is reopened after
+        # being hidden via _toggle_nav_panel(); see that method.
+        self._nav_panel_sizes: list[int] | None = None
+
+        # Independent receive-only capture for this tab's own Start/Stop
+        # Passive Sniffing button. Reuses the exact same QThread worker,
+        # CRC/frame decoding, and cleanup lifecycle as the Passive Sniffing
+        # tab (see PassiveCaptureService) — this is a second, separate
+        # instance so this tab can sniff on its own port/profile settings
+        # independently of whatever Tab 1 is doing.
+        self.sniff_capture_service = PassiveCaptureService(self)
+
+        self._build_ui()
+        self._connect_sniff_service()
+        self.load_profiles_from_json()
+        self._refresh_profile_list()
+        self._set_active_profile(self.current_profile_id)
+
+    def _build_ui(self) -> None:
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        self.splitter = QSplitter(Qt.Horizontal)
+        root_layout.addWidget(self.splitter)
+
+        self._build_left_panel()
+        self._build_right_panel()
+
+        self.splitter.addWidget(self.left_panel)
+        self.splitter.addWidget(self.right_panel)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 3)
+
+    def _toggle_nav_panel(self) -> None:
+        """Hide or restore the profile-list sidebar.
+
+        Hiding it makes the splitter give its space straight to the summary
+        and register table. The toggle button lives in the right panel (see
+        _build_edit_toolbar) so it stays reachable even while the sidebar is
+        fully collapsed to zero width.
+        """
+        if self.left_panel.isVisible():
+            self._nav_panel_sizes = self.splitter.sizes()
+            self.left_panel.setVisible(False)
+            self.toggle_nav_btn.setText("» Show Profiles")
+            self.toggle_nav_btn.setToolTip("Show the profile list")
+        else:
+            self.left_panel.setVisible(True)
+            if self._nav_panel_sizes:
+                self.splitter.setSizes(self._nav_panel_sizes)
+            self.toggle_nav_btn.setText("« Hide Profiles")
+            self.toggle_nav_btn.setToolTip(
+                "Hide the profile list to give the summary more room"
+            )
+
+    def _build_left_panel(self) -> None:
+        # Styled as a distinct nav sidebar (white card, right border, accented
+        # selection) rather than a plain list box, and paired with the toggle
+        # button in the toolbar so it can be fully collapsed to give the
+        # summary/table below more room. See _toggle_nav_panel().
+        self.left_panel = QWidget()
+        self.left_panel.setObjectName("profileNavPanel")
+        self.left_panel.setStyleSheet(
+            """
+            #profileNavPanel {
+                background: #ffffff;
+                border-right: 1px solid #cbd5e1;
+            }
+            """
+        )
+        left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(12, 12, 12, 12)
+        left_layout.setSpacing(8)
+
+        title = QLabel("Profiles")
+        title.setStyleSheet("font-size: 11pt; font-weight: 700; color: #1f2937;")
+        left_layout.addWidget(title)
+
+        button_layout = QHBoxLayout()
+        self.add_profile_btn = QPushButton("Add")
+        self.add_profile_btn.clicked.connect(self.add_profile)
+        self.remove_profile_btn = QPushButton("Remove")
+        self.remove_profile_btn.clicked.connect(self.remove_profile)
+        button_layout.addWidget(self.add_profile_btn)
+        button_layout.addWidget(self.remove_profile_btn)
+        left_layout.addLayout(button_layout)
+
+        self.profile_list = QListWidget()
+        self.profile_list.currentItemChanged.connect(self._on_profile_selected)
+        self.profile_list.setAlternatingRowColors(True)
+        self.profile_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.profile_list.setMinimumWidth(210)
+        self.profile_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.profile_list.setSpacing(2)
+        self.profile_list.setStyleSheet(
+            """
+            QListWidget {
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                background: #ffffff;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 7px 8px;
+                border-radius: 3px;
+                color: #334155;
+            }
+            QListWidget::item:hover:!selected {
+                background: #eef2f7;
+            }
+            QListWidget::item:selected {
+                background: #dbeafe;
+                color: #174ea6;
+                font-weight: 600;
+            }
+            """
+        )
+        left_layout.addWidget(self.profile_list)
+
+    def _build_right_panel(self) -> None:
+        self.right_panel = QWidget()
+        right_layout = QVBoxLayout(self.right_panel)
+        right_layout.setContentsMargins(10, 8, 10, 8)
+        right_layout.setSpacing(6)
+
+        self._build_edit_toolbar(right_layout)
+        self._build_name_row(right_layout)
+        self._build_config_form(right_layout)
+        self._build_register_controls_row(right_layout)
+        self._build_sniff_toolbar(right_layout)
+        self._build_table(right_layout)
+
+    def _build_edit_toolbar(self, parent_layout: QVBoxLayout) -> None:
+        row = QHBoxLayout()
+
+        # Lives in the right panel (not the sidebar itself) so it stays
+        # reachable after the sidebar is fully collapsed — the only way to
+        # bring it back otherwise would be to drag a zero-width splitter
+        # handle, which isn't discoverable.
+        self.toggle_nav_btn = QPushButton("« Hide Profiles")
+        self.toggle_nav_btn.setToolTip("Hide the profile list to give the summary more room")
+        self.toggle_nav_btn.clicked.connect(self._toggle_nav_panel)
+        row.addWidget(self.toggle_nav_btn)
+        row.addSpacing(12)
+
+        self.edit_profile_btn = QPushButton("Edit Profile")
+        self.edit_profile_btn.clicked.connect(self.enter_edit_mode)
+        row.addWidget(self.edit_profile_btn)
+
+        self.save_profile_btn = QPushButton("Save Profile")
+        self.save_profile_btn.setProperty("role", "primary")
+        self.save_profile_btn.clicked.connect(self.save_and_exit_edit_mode)
+        row.addWidget(self.save_profile_btn)
+
+        self.discard_changes_btn = QPushButton("Discard Changes")
+        self.discard_changes_btn.clicked.connect(self.discard_changes)
+        row.addWidget(self.discard_changes_btn)
+
+        row.addStretch()
+        parent_layout.addLayout(row)
+
+        self.edit_status_label = QLabel("Select a profile to view its details.")
+        self.edit_status_label.setWordWrap(True)
+        self.edit_status_label.setStyleSheet(_STATUS_STYLES["info"])
+        parent_layout.addWidget(self.edit_status_label)
+
+    def _build_name_row(self, parent_layout: QVBoxLayout) -> None:
+        name_row = QHBoxLayout()
+        name_label = QLabel("Profile name")
+        name_label.setStyleSheet("font-weight: 600;")
+        name_row.addWidget(name_label)
+        self.profile_name_edit = QLineEdit()
+        self.profile_name_edit.setPlaceholderText("Profile name")
+        self.profile_name_edit.textEdited.connect(self._on_profile_name_changed)
+        name_row.addWidget(self.profile_name_edit, 1)
+        parent_layout.addLayout(name_row)
+
+    def _build_config_form(self, parent_layout: QVBoxLayout) -> None:
+        self.config_group = QGroupBox("Profile Configuration")
+        config_layout = QGridLayout(self.config_group)
+        for field_column in (1, 3, 5, 7):
+            config_layout.setColumnStretch(field_column, 1)
+
+        self.slave_id_spin = QSpinBox()
+        self.slave_id_spin.setRange(0, 247)
+        self.slave_id_spin.valueChanged.connect(self._on_config_field_changed)
+
+        self.baudrate_combo = QComboBox()
+        for rate in (9600, 19200, 38400, 57600, 115200):
+            self.baudrate_combo.addItem(str(rate), rate)
+        self.baudrate_combo.currentIndexChanged.connect(self._on_config_field_changed)
+
+        self.parity_combo = QComboBox()
+        self.parity_combo.addItem("None", "None")
+        self.parity_combo.addItem("Even", "Even")
+        self.parity_combo.addItem("Odd", "Odd")
+        self.parity_combo.currentIndexChanged.connect(self._on_config_field_changed)
+
+        self.stop_bits_combo = QComboBox()
+        self.stop_bits_combo.addItem("1", 1.0)
+        self.stop_bits_combo.addItem("1.5", 1.5)
+        self.stop_bits_combo.addItem("2", 2.0)
+        self.stop_bits_combo.currentIndexChanged.connect(self._on_config_field_changed)
+
+        # One row: all four fields fit comfortably at the tab's minimum width
+        # and this alone saves two whole rows of vertical space versus
+        # stacking them, leaving more room for the register table below.
+        config_layout.addWidget(QLabel("Slave ID"), 0, 0)
+        config_layout.addWidget(self.slave_id_spin, 0, 1)
+        config_layout.addWidget(QLabel("Baudrate"), 0, 2)
+        config_layout.addWidget(self.baudrate_combo, 0, 3)
+        config_layout.addWidget(QLabel("Parity"), 0, 4)
+        config_layout.addWidget(self.parity_combo, 0, 5)
+        config_layout.addWidget(QLabel("Stop Bits"), 0, 6)
+        config_layout.addWidget(self.stop_bits_combo, 0, 7)
+
+        self.config_group.setEnabled(False)
+        parent_layout.addWidget(self.config_group)
+
+        # Styled as a card (matching the Packet Inspector tab's help banner)
+        # rather than plain text, so it stays legible as the focal point of
+        # this tab once the profile-list sidebar is hidden.
+        self.profile_summary_label = QLabel("")
+        self.profile_summary_label.setWordWrap(True)
+        self.profile_summary_label.setStyleSheet(
+            "padding: 9px; background: #eef5ff; border: 1px solid #b8d4f5;"
+            "border-radius: 4px; color: #1f2937; font-weight: 600;"
+        )
+        parent_layout.addWidget(self.profile_summary_label)
+
+    def _build_register_controls_row(self, parent_layout: QVBoxLayout) -> None:
+        # Search/filter and add/remove share one row instead of a filter
+        # group box plus a separate toolbar row — two fewer rows, and one
+        # fewer group-box border, of vertical space spent before the table.
+        row = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search registers...")
+        self.search_edit.textChanged.connect(self._apply_filter)
+        row.addWidget(self.search_edit, 3)
+
+        self.function_code_filter = QComboBox()
+        self.function_code_filter.addItem("All functions", None)
+        for code, name in sorted(FUNCTION_NAMES.items()):
+            self.function_code_filter.addItem(f"{code:02d} — {name}", code)
+        self.function_code_filter.currentIndexChanged.connect(self._apply_filter)
+        row.addWidget(self.function_code_filter, 1)
+
+        self.reset_filter_btn = QPushButton("Reset Filter")
+        self.reset_filter_btn.clicked.connect(self.reset_filter)
+        row.addWidget(self.reset_filter_btn)
+
+        row.addSpacing(16)
+
+        self.add_register_btn = QPushButton("Add register")
+        self.add_register_btn.clicked.connect(self.add_register)
+        row.addWidget(self.add_register_btn)
+
+        self.remove_register_btn = QPushButton("Remove register")
+        self.remove_register_btn.clicked.connect(self.remove_register)
+        row.addWidget(self.remove_register_btn)
+
+        parent_layout.addLayout(row)
+
+    def _build_sniff_toolbar(self, parent_layout: QVBoxLayout) -> None:
+        """Independent receive-only Start/Stop controls for this profile.
+
+        Mirrors the Start/Stop lifecycle on the Passive Sniffing tab (same
+        PassiveCaptureService class, same receive-only guarantee — this
+        never transmits) but opens its own serial connection using this
+        profile's own slave ID/baud/parity/stop bits and only ever updates
+        the rows already defined by the selected profile. See
+        _apply_frame_to_registers(): the table is a live view of the
+        profile's own register list, not a log of every frame observed.
+        """
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Sniff port"))
+        self.sniff_port_combo = QComboBox()
+        self.sniff_port_combo.setEditable(True)
+        self.sniff_port_combo.setMinimumWidth(200)
+        row.addWidget(self.sniff_port_combo)
+
+        self.sniff_refresh_btn = QPushButton("Refresh Ports")
+        self.sniff_refresh_btn.clicked.connect(self._refresh_sniff_ports)
+        row.addWidget(self.sniff_refresh_btn)
+
+        self.sniff_toggle_btn = QPushButton("Start Passive Sniffing")
+        self.sniff_toggle_btn.setProperty("role", "primary")
+        self.sniff_toggle_btn.clicked.connect(self.toggle_sniffing)
+        row.addWidget(self.sniff_toggle_btn)
+        row.addStretch()
+        parent_layout.addLayout(row)
+
+        self.sniff_status_label = QLabel(
+            "Not sniffing. Select a profile with registers, choose a port, and click Start."
+        )
+        self.sniff_status_label.setWordWrap(True)
+        self.sniff_status_label.setStyleSheet(_STATUS_STYLES["info"])
+        parent_layout.addWidget(self.sniff_status_label)
+
+        self._refresh_sniff_ports()
+
+    def _build_table(self, parent_layout: QVBoxLayout) -> None:
+        self.register_table = QTableWidget(0, 11)
+        self.register_table.setHorizontalHeaderLabels(
+            [
+                "Name",
+                "Function Code",
+                "Register",
+                "Address",
+                "Raw Hex Value",
+                "Multiplier",
+                "Parsed Value",
+                "Unit",
+                "Description",
+                "Timestamp",
+                "Status",
+            ]
+        )
+        self.register_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.register_table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.register_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.register_table.setAlternatingRowColors(True)
+        # Description (column 8) stretches to fill remaining space; the two
+        # sniffing-status columns appended after it keep fixed widths so
+        # adding them doesn't silently move the stretch to the new last
+        # column and squeeze Description down to its default width.
+        header = self.register_table.horizontalHeader()
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        self.register_table.verticalHeader().setVisible(False)
+        self.register_table.setWordWrap(False)
+        self.register_table.setColumnWidth(0, 150)
+        self.register_table.setColumnWidth(1, 210)  # Function Code: fits "0x03 Read Holding Registers"
+        self.register_table.setColumnWidth(_TIMESTAMP_COLUMN, 110)
+        self.register_table.setColumnWidth(_STATUS_COLUMN, 140)
+        # A modest floor, not a target: `stretch=1` below is what actually
+        # gives this table the rest of the tab's height on any reasonably
+        # sized window. Kept small so it doesn't itself force the whole page
+        # to grow past the window on a shorter one — see the matching
+        # MainWindow.profile_tab.setMinimumHeight() override, which is what
+        # lets this table's own scrollbar handle a short window instead of
+        # the whole page scrolling.
+        self.register_table.setMinimumHeight(220)
+        self.register_table.cellChanged.connect(self._on_cell_changed)
+        parent_layout.addWidget(self.register_table, stretch=1)
+
+        header_tooltips = {
+            1: "Which Modbus read produced this register, e.g. 0x03 = Read Holding Registers.",
+            2: "Raw, zero-based register address exactly as seen on the wire.",
+            3: "Standard Modicon reference number, derived automatically from "
+            "Function Code + Register (e.g. 0x03 + Register 0 -> 40001). Read-only.",
+            4: "Fills in automatically from a matching sniffed response packet.",
+            6: "Fills in automatically: Raw Hex Value × Multiplier.",
+            _TIMESTAMP_COLUMN: "When this row last matched a sniffed response packet.",
+            _STATUS_COLUMN: "Passive-sniffing state for this row: not sniffed yet, "
+            "waiting for data, updated, or stopped.",
+        }
+        for column, tooltip in header_tooltips.items():
+            header_item = self.register_table.horizontalHeaderItem(column)
+            if header_item is not None:
+                header_item.setToolTip(tooltip)
+
+    def load_profiles_from_json(self) -> None:
+        if not self.profile_json_path.exists():
+            self.profiles = []
+            return
+        try:
+            with self.profile_json_path.open("r", encoding="utf-8") as handle:
+                self.profiles = json.load(handle)
+        except (json.JSONDecodeError, OSError):
+            self.profiles = []
+
+    def save_profiles_to_json(self) -> None:
+        try:
+            with self.profile_json_path.open("w", encoding="utf-8") as handle:
+                json.dump(self.profiles, handle, indent=2)
+        except OSError:
+            pass
+
+    def _refresh_profile_list(self) -> None:
+        self.profile_list.clear()
+        for profile in self.profiles:
+            item = QListWidgetItem(profile.get("name", "Untitled"))
+            item.setData(Qt.UserRole, profile.get("id"))
+            self.profile_list.addItem(item)
+
+    def _set_status(self, text: str, kind: str = "info") -> None:
+        self.edit_status_label.setStyleSheet(_STATUS_STYLES.get(kind, _STATUS_STYLES["info"]))
+        self.edit_status_label.setText(text)
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def _on_profile_selected(
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None
+    ) -> None:
+        if self._editing and current is not previous:
+            if not self._confirm_discard_if_editing():
+                self._reselect_item(previous)
+                return
+        self.current_profile_id = current.data(Qt.UserRole) if current is not None else None
+        self._load_current_profile()
+
+    def _reselect_item(self, item: QListWidgetItem | None) -> None:
+        self.profile_list.blockSignals(True)
+        if item is not None:
+            self.profile_list.setCurrentItem(item)
+        self.profile_list.blockSignals(False)
+
+    def _confirm_discard_if_editing(self) -> bool:
+        reply = QMessageBox.question(
+            self,
+            "Discard unsaved changes?",
+            "This profile has unsaved changes. Switch profiles and discard them?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return False
+        self._revert_to_snapshot()
+        return True
+
+    def _set_active_profile(self, profile_id: str | None) -> None:
+        if profile_id is None or not self.profiles:
+            if self.profile_list.count() > 0:
+                self.profile_list.setCurrentRow(0)
+            else:
+                self.current_profile_id = None
+                self._load_current_profile()
+            return
+        for index in range(self.profile_list.count()):
+            item = self.profile_list.item(index)
+            if item and item.data(Qt.UserRole) == profile_id:
+                self.profile_list.setCurrentItem(item)
+                return
+        self._set_active_profile(None)
+
+    # ------------------------------------------------------------------
+    # Load / display (always read-only until "Edit Profile" is clicked)
+    # ------------------------------------------------------------------
+
+    def _load_current_profile(self) -> None:
+        profile = self._current_profile()
+        self._ignore_changes = True
+        self._editing = False
+        self._edit_snapshot = None
+
+        if profile is None:
+            self.profile_name_edit.clear()
+            self.profile_name_edit.setEnabled(False)
+            self.slave_id_spin.setValue(0)
+            self.baudrate_combo.setCurrentIndex(0)
+            self.parity_combo.setCurrentIndex(0)
+            self.stop_bits_combo.setCurrentIndex(0)
+            self.register_table.setRowCount(0)
+            self._set_profile_controls_enabled(False)
+            self.edit_profile_btn.setEnabled(False)
+            self.save_profile_btn.setEnabled(False)
+            self.discard_changes_btn.setEnabled(False)
+            self._update_profile_summary(None)
+            self._set_status(
+                "No profiles yet. Click \"Add\" to create one, or capture a session "
+                "on the Passive Sniffing tab and save it as a profile.",
+                "info",
+            )
+            self._ignore_changes = False
+            return
+
+        self.profile_name_edit.setEnabled(True)
+        self.profile_name_edit.setText(profile.get("name", ""))
+        self.slave_id_spin.setValue(profile.get("slave_id", 0))
+        self._select_combo_by_value(self.baudrate_combo, profile.get("baudrate", 9600))
+        self._select_combo_by_value(self.parity_combo, profile.get("parity", "None"))
+        self._select_combo_by_value(self.stop_bits_combo, profile.get("stop_bits", 1.0))
+        self._populate_register_table(profile.get("registers", []))
+        self._set_profile_controls_enabled(False)
+        self.edit_profile_btn.setEnabled(True)
+        self.save_profile_btn.setEnabled(False)
+        self.discard_changes_btn.setEnabled(False)
+        self._update_profile_summary(profile)
+        self._set_status(
+            "Read-only — click \"Edit Profile\" to change the configuration or registers.",
+            "info",
+        )
+        self._ignore_changes = False
+
+    def _select_combo_by_value(self, combo: QComboBox, value) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _set_profile_controls_enabled(self, enabled: bool) -> None:
+        self.profile_name_edit.setReadOnly(not enabled)
+        self.config_group.setEnabled(enabled)
+        self.add_register_btn.setEnabled(enabled)
+        self.remove_register_btn.setEnabled(enabled)
+        self.register_table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+            if enabled
+            else QAbstractItemView.NoEditTriggers
+        )
+
+    def _update_profile_summary(self, profile: dict | None) -> None:
+        if not profile:
+            self.profile_summary_label.setText("")
+            self.profile_summary_label.setVisible(False)
+            return
+        self.profile_summary_label.setVisible(True)
+        registers = profile.get("registers", [])
+        if not registers:
+            self.profile_summary_label.setText("No registers mapped yet.")
+            return
+        registers_with_address = [
+            register["address"] for register in registers if register.get("address") is not None
+        ]
+        if registers_with_address:
+            registers_with_address.sort()
+            range_text = (
+                f"{registers_with_address[0]}–{registers_with_address[-1]}"
+                if len(registers_with_address) > 1
+                else str(registers_with_address[0])
+            )
+            self.profile_summary_label.setText(
+                f"{len(registers)} register(s) mapped · register range {range_text}"
+            )
+        else:
+            self.profile_summary_label.setText(
+                f"{len(registers)} register(s), no registers set yet."
+            )
+
+    # ------------------------------------------------------------------
+    # Edit / Save / Discard workflow
+    # ------------------------------------------------------------------
+
+    def enter_edit_mode(self) -> None:
+        profile = self._current_profile()
+        if profile is None:
+            return
+        if self.sniff_capture_service.worker is not None:
+            self._set_status(
+                "Stop passive sniffing before editing this profile.", "warning"
+            )
+            return
+        self._edit_snapshot = copy.deepcopy(profile)
+        self._editing = True
+        self._set_profile_controls_enabled(True)
+        self.edit_profile_btn.setEnabled(False)
+        self.save_profile_btn.setEnabled(True)
+        self.discard_changes_btn.setEnabled(True)
+        self._set_status(
+            "Editing — changes are kept locally until you click \"Save Profile\".",
+            "editing",
+        )
+        self.profile_name_edit.setFocus()
+
+    def save_and_exit_edit_mode(self) -> None:
+        if not self._editing:
+            return
+        profile = self._current_profile()
+        if profile is None:
+            return
+        profile["name"] = self.profile_name_edit.text().strip() or "Untitled"
+        self._sync_config_fields(profile)
+        self.save_profiles_to_json()
+        self._edit_snapshot = None
+        self._editing = False
+        self._refresh_profile_list()
+        self._set_active_profile(profile["id"])
+        self._set_status(f"Saved \"{profile['name']}\".", "saved")
+
+    def discard_changes(self) -> None:
+        if not self._editing:
+            return
+        profile_id = self.current_profile_id
+        self._revert_to_snapshot()
+        self._refresh_profile_list()
+        # _refresh_profile_list() clears the list widget, which itself fires a
+        # selection-changed signal and would otherwise null out
+        # current_profile_id before we get to reload it. Reselect by id
+        # explicitly instead of reloading in place.
+        self._set_active_profile(profile_id)
+        self._set_status("Changes discarded.", "info")
+
+    def _revert_to_snapshot(self) -> None:
+        if self._edit_snapshot is not None and self.current_profile_id is not None:
+            for index, profile in enumerate(self.profiles):
+                if profile.get("id") == self.current_profile_id:
+                    self.profiles[index] = self._edit_snapshot
+                    break
+            self.save_profiles_to_json()
+        self._edit_snapshot = None
+        self._editing = False
+
+    def _sync_config_fields(self, profile: dict) -> None:
+        profile["slave_id"] = self.slave_id_spin.value()
+        profile["baudrate"] = int(self.baudrate_combo.currentData())
+        profile["parity"] = str(self.parity_combo.currentData())
+        profile["stop_bits"] = float(self.stop_bits_combo.currentData())
+        addresses = [
+            register.get("address")
+            for register in profile.get("registers", [])
+            if register.get("address") is not None
+        ]
+        profile["start_address"] = min(addresses) if addresses else 0
+        profile["count"] = len(profile.get("registers", []))
+
+    def add_profile(self) -> None:
+        new_profile = {
+            "id": uuid.uuid4().hex,
+            "name": "New profile",
+            "slave_id": 0,
+            "start_address": 0,
+            "count": 1,
+            "baudrate": 9600,
+            "parity": "None",
+            "stop_bits": 1.0,
+            "registers": [],
+        }
+        self.profiles.append(new_profile)
+        self.save_profiles_to_json()
+        self._refresh_profile_list()
+        self._set_active_profile(new_profile["id"])
+        self.enter_edit_mode()
+
+    def remove_profile(self) -> None:
+        current = self.profile_list.currentItem()
+        if current is None:
+            return
+        profile_id = current.data(Qt.UserRole)
+        profile = self._current_profile()
+        name = profile.get("name", "this profile") if profile else "this profile"
+        reply = QMessageBox.question(
+            self,
+            "Remove profile",
+            f'Remove "{name}"? This cannot be undone.',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.profiles = [p for p in self.profiles if p.get("id") != profile_id]
+        self._editing = False
+        self._edit_snapshot = None
+        self.save_profiles_to_json()
+        self._refresh_profile_list()
+        self._set_active_profile(None)
+
+    def _current_profile(self) -> dict | None:
+        if self.current_profile_id is None:
+            return None
+        for profile in self.profiles:
+            if profile.get("id") == self.current_profile_id:
+                return profile
+        return None
+
+    def _on_profile_name_changed(self, text: str) -> None:
+        if self._ignore_changes:
+            return
+        profile = self._current_profile()
+        if profile is None:
+            return
+        # Staged only: the list and disk copy update when Save Profile runs,
+        # so the sidebar doesn't rebuild (and steal focus) on every keystroke.
+        profile["name"] = text.strip() or "Untitled"
+
+    def _on_config_field_changed(self, *_args) -> None:
+        if self._ignore_changes:
+            return
+        profile = self._current_profile()
+        if profile is None:
+            return
+        self._sync_config_fields(profile)
+
+    def _populate_register_table(self, registers: list[dict]) -> None:
+        self._ignore_changes = True
+        self.register_table.setRowCount(0)
+        for register in registers:
+            self._insert_register_row(register)
+        self._ignore_changes = False
+        self._apply_filter()
+
+    def _insert_register_row(self, register: dict) -> None:
+        row = self.register_table.rowCount()
+        self.register_table.insertRow(row)
+
+        self.register_table.setItem(row, 0, QTableWidgetItem(register.get("name", "")))
+        self.register_table.setItem(
+            row, 1, QTableWidgetItem(self._function_code_display(register.get("function_code")))
+        )
+        self.register_table.setItem(row, 2, QTableWidgetItem(self._register_display(register.get("address"))))
+
+        address_item = QTableWidgetItem(
+            self._mapped_address_display(register.get("address"), register.get("function_code"))
+        )
+        address_item.setFlags(address_item.flags() & ~Qt.ItemIsEditable)
+        self.register_table.setItem(row, 3, address_item)
+
+        raw_item = QTableWidgetItem(register.get("raw_hex", ""))
+        raw_item.setFlags(raw_item.flags() & ~Qt.ItemIsEditable)
+        self.register_table.setItem(row, 4, raw_item)
+
+        self.register_table.setItem(row, 5, QTableWidgetItem(str(register.get("multiplier", 1.0))))
+
+        parsed_item = QTableWidgetItem(register.get("parsed_value", ""))
+        parsed_item.setFlags(parsed_item.flags() & ~Qt.ItemIsEditable)
+        self.register_table.setItem(row, 6, parsed_item)
+
+        self.register_table.setItem(row, 7, QTableWidgetItem(register.get("unit", "")))
+
+        # Description doesn't wrap (setWordWrap(False) on the whole table,
+        # so every row stays one line tall) and can run longer than the
+        # column, so the full text is always available as a hover tooltip —
+        # same pattern the Passive Sniffing tab's capture table already uses.
+        description_text = register.get("description", "") or ""
+        description_item = QTableWidgetItem(description_text)
+        description_item.setToolTip(description_text)
+        self.register_table.setItem(row, 8, description_item)
+
+        # Sniffing status, not part of the saved profile: reset to a fresh
+        # "not sniffed yet" placeholder whenever a row is (re)built, e.g. on
+        # profile load or Add Register. Updated live by _refresh_sniff_cells().
+        timestamp_item = QTableWidgetItem("—")
+        timestamp_item.setFlags(timestamp_item.flags() & ~Qt.ItemIsEditable)
+        self.register_table.setItem(row, _TIMESTAMP_COLUMN, timestamp_item)
+
+        status_item = QTableWidgetItem("Not sniffed yet")
+        status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+        self.register_table.setItem(row, _STATUS_COLUMN, status_item)
+
+    def add_register(self) -> None:
+        if not self._editing:
+            return
+        profile = self._current_profile()
+        if profile is None:
+            return
+        register = {
+            "name": "",
+            "description": "",
+            "address": None,
+            "multiplier": 1.0,
+            "raw_hex": "",
+            "parsed_value": "",
+            "unit": "",
+            "function_code": None,
+        }
+        profile.setdefault("registers", []).append(register)
+        self._insert_register_row(register)
+        self._update_profile_summary(profile)
+
+    def remove_register(self) -> None:
+        if not self._editing:
+            return
+        selected_rows = sorted({index.row() for index in self.register_table.selectedIndexes()})
+        if not selected_rows:
+            return
+        profile = self._current_profile()
+        if profile is None:
+            return
+        for row in reversed(selected_rows):
+            self.register_table.removeRow(row)
+            if 0 <= row < len(profile["registers"]):
+                profile["registers"].pop(row)
+        self._update_profile_summary(profile)
+
+    def _on_cell_changed(self, row: int, column: int) -> None:
+        if self._ignore_changes:
+            return
+        profile = self._current_profile()
+        if profile is None:
+            return
+        if row < 0 or row >= len(profile["registers"]):
+            return
+        register = profile["registers"][row]
+        item = self.register_table.item(row, column)
+        if item is None:
+            return
+        text = item.text().strip()
+
+        if column == 0:
+            register["name"] = text
+        elif column == 1:
+            register["function_code"] = self._parse_function_code(text)
+            register["raw_hex"] = ""
+            register["parsed_value"] = ""
+            self._refresh_measurement_cells(row, register)
+            self._refresh_mapped_address_cell(row, register)
+            self._refresh_function_code_cell(row, register)
+            self._update_profile_summary(profile)
+        elif column == 2:
+            register["address"] = self._parse_int(text)
+            register["raw_hex"] = ""
+            register["parsed_value"] = ""
+            self._refresh_measurement_cells(row, register)
+            self._refresh_mapped_address_cell(row, register)
+            self._update_profile_summary(profile)
+        elif column == 5:
+            register["multiplier"] = self._parse_float(text) or 1.0
+            self._recompute_parsed_value(row, register)
+        elif column == 7:
+            register["unit"] = text
+        elif column == 8:
+            register["description"] = text
+            item.setToolTip(text)
+
+    def _recompute_parsed_value(self, row: int, register: dict) -> None:
+        """Re-derive Parsed Value from the stored Raw Hex Value and multiplier.
+
+        Without this, changing the multiplier on an already-detected register
+        left the Parsed Value column stuck at whatever it showed when the
+        raw value was first captured.
+        """
+        raw_hex = register.get("raw_hex")
+        if not raw_hex:
+            return
+        try:
+            raw_value = int(raw_hex, 16)
+        except ValueError:
+            return
+        multiplier = float(register.get("multiplier", 1.0))
+        register["parsed_value"] = self._format_parsed_value(raw_value * multiplier)
+        self._refresh_measurement_cells(row, register)
+
+    def _refresh_measurement_cells(self, row: int, register: dict) -> None:
+        """Redisplay Raw Hex Value / Parsed Value from the register dict.
+
+        Never touches the Function Code, Register, or Address columns, so
+        it's safe to call synchronously from inside a cellChanged handler
+        for this row.
+        """
+        raw_item = self.register_table.item(row, 4)
+        parsed_item = self.register_table.item(row, 6)
+        if raw_item is None or parsed_item is None:
+            return
+        self.register_table.blockSignals(True)
+        try:
+            raw_item.setText(register.get("raw_hex", ""))
+            parsed_item.setText(register.get("parsed_value", ""))
+        finally:
+            self.register_table.blockSignals(False)
+
+    def _refresh_mapped_address_cell(self, row: int, register: dict) -> None:
+        """Recompute the read-only Address column from Function Code + Register.
+
+        Address is never itself editable, so this is never called from
+        within its own cellChanged signal — safe to apply synchronously,
+        unlike the Function Code cell below.
+        """
+        item = self.register_table.item(row, 3)
+        if item is None:
+            return
+        self.register_table.blockSignals(True)
+        try:
+            item.setText(
+                self._mapped_address_display(register.get("address"), register.get("function_code"))
+            )
+        finally:
+            self.register_table.blockSignals(False)
+
+    def _refresh_function_code_cell(self, row: int, register: dict) -> None:
+        """Reformat the Function Code cell to its "0xNN Name" display.
+
+        Deferred to the next event-loop tick: this runs from inside the
+        Function Code column's own cellChanged signal (the edit that just
+        set this very cell), and Qt does not tolerate a
+        QTableWidgetItem.setText() call nested inside its own change
+        notification — so this waits until that signal has fully unwound.
+        """
+
+        def _apply() -> None:
+            if row >= self.register_table.rowCount():
+                return
+            item = self.register_table.item(row, 1)
+            if item is None:
+                return
+            self.register_table.blockSignals(True)
+            try:
+                item.setText(self._function_code_display(register.get("function_code")))
+            finally:
+                self.register_table.blockSignals(False)
+
+        QTimer.singleShot(0, _apply)
+
+    def _parse_int(self, value: str) -> int | None:
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    def _parse_float(self, value: str) -> float | None:
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    def _format_parsed_value(self, value: float) -> str:
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return f"{value:.6g}"
+
+    def _register_display(self, address: int | None) -> str:
+        return "" if address is None else str(address)
+
+    def _mapped_address_display(self, address: int | None, function_code: int | None) -> str:
+        """Standard Modicon reference number for the Address column.
+
+        Zero-padded to 5 digits (e.g. FC 03 address 0 -> "40001", FC 01
+        address 5 -> "00006"), matching how every PLC vendor documents
+        registers. Blank until both the register and its function code are
+        known.
+        """
+        if address is None:
+            return ""
+        offset = MODICON_BLOCK_OFFSET.get(function_code)
+        if offset is None:
+            return ""
+        return f"{offset + address:05d}"
+
+    def _function_code_display(self, function_code: int | None) -> str:
+        if function_code is None:
+            return ""
+        name = FUNCTION_NAMES.get(function_code)
+        return f"0x{function_code:02X} {name}" if name else f"0x{function_code:02X}"
+
+    def _parse_function_code(self, text: str) -> int | None:
+        text = text.strip()
+        if not text:
+            return None
+        # Accept a bare decimal ("3"), a hex code ("0x03"), or the full
+        # descriptive display ("0x03 Read Holding Registers") by reading
+        # only its leading token, so re-editing an unchanged cell round-trips.
+        token = text.split(maxsplit=1)[0]
+        try:
+            return int(token, 16) if token.lower().startswith("0x") else int(token)
+        except ValueError:
+            return None
+
+    def _find_value_for_address(
+        self, address: int, frame: CapturedModbusFrame
+    ) -> int | None:
+        if frame.address is None or frame.quantity is None:
+            return None
+        offset = address - frame.address
+        if offset < 0 or offset >= len(frame.values):
+            return None
+        return frame.values[offset]
+
+    def set_latest_frame(self, frame: CapturedModbusFrame) -> None:
+        """Receive one decoded, CRC-valid frame from any passive source.
+
+        Two sources feed this: frames forwarded from the Passive Sniffing
+        tab (Tab 1, via MainWindow) and, independently, this tab's own
+        Start/Stop Passive Sniffing worker (see _connect_sniff_service()).
+        Either way, keeps the most recent frame for reference and, when it
+        is a response matching the selected profile's slave ID, fills in
+        that profile's Raw Hex Value / Parsed Value / Timestamp / Status
+        columns live.
+        """
+        self._latest_frame = frame
+        self._apply_frame_to_registers(frame)
+
+    def _apply_frame_to_registers(self, frame: CapturedModbusFrame) -> None:
+        """Match one decoded frame against the selected profile's own registers.
+
+        Deliberately register-driven, not frame-driven: only addresses the
+        profile already lists are ever looked up or written to the table,
+        so this never grows new rows or shows values for anything the
+        profile didn't ask for. The table stays a live view of the
+        profile's configuration, not a log of everything seen on the bus.
+        """
+        profile = self._current_profile()
+        if profile is None or not profile.get("registers"):
+            return
+        if frame.slave_id != profile.get("slave_id"):
+            return
+
+        self._ignore_changes = True
+        updated = False
+        for row, register in enumerate(profile["registers"]):
+            address = register.get("address")
+            if address is None:
+                continue
+            function_code = register.get("function_code")
+            if function_code is not None and function_code != frame.function_code:
+                continue
+            raw_value = self._find_value_for_address(address, frame)
+            if raw_value is None:
+                continue
+            register["raw_hex"] = f"0x{raw_value:04X}"
+            multiplier = float(register.get("multiplier", 1.0))
+            register["parsed_value"] = self._format_parsed_value(raw_value * multiplier)
+            self._refresh_measurement_cells(row, register)
+            self._refresh_sniff_cells(row, frame.timestamp_text, "Updated")
+            log_event(
+                logging.INFO,
+                "profile_register_decoded",
+                profile_id=profile.get("id"),
+                register_address=address,
+                function_code=frame.function_code,
+                raw_hex=register["raw_hex"],
+                parsed_value=register["parsed_value"],
+            )
+            updated = True
+
+        self._ignore_changes = False
+        if updated:
+            self.save_profiles_to_json()
+
+    # ------------------------------------------------------------------
+    # Passive sniffing: independent Start/Stop capture for this tab
+    # ------------------------------------------------------------------
+
+    def _connect_sniff_service(self) -> None:
+        self.sniff_capture_service.frame_received.connect(self.set_latest_frame)
+        self.sniff_capture_service.status_changed.connect(self._on_sniff_status)
+        self.sniff_capture_service.error_occurred.connect(self._on_sniff_error)
+        self.sniff_capture_service.running_changed.connect(self._on_sniff_running_changed)
+
+    def _refresh_sniff_ports(self) -> None:
+        previous = (
+            self.sniff_port_combo.currentData()
+            or self.sniff_port_combo.currentText().strip()
+        )
+        self.sniff_port_combo.clear()
+        try:
+            ports = sorted(
+                self.sniff_capture_service.available_ports(),
+                key=lambda item: item.device,
+            )
+        except OSError as error:
+            self._set_sniff_status(f"Could not list serial ports: {error}", "warning")
+            return
+        for port in ports:
+            self.sniff_port_combo.addItem(
+                f"{port.device} — {port.description or 'Serial adapter'}", port.device
+            )
+        index = self.sniff_port_combo.findData(previous)
+        if index >= 0:
+            self.sniff_port_combo.setCurrentIndex(index)
+        elif previous:
+            self.sniff_port_combo.setEditText(str(previous))
+
+    def _selected_sniff_port(self) -> str:
+        return (
+            str(self.sniff_port_combo.currentData() or self.sniff_port_combo.currentText())
+            .split(" — ", 1)[0]
+            .strip()
+        )
+
+    def toggle_sniffing(self) -> None:
+        if self.sniff_capture_service.worker is not None:
+            self.stop_sniffing()
+        else:
+            self.start_sniffing()
+
+    def start_sniffing(self) -> None:
+        profile = self._current_profile()
+        if profile is None:
+            self._set_sniff_status(
+                "Select a profile before starting passive sniffing.", "warning"
+            )
+            return
+        if not profile.get("registers"):
+            self._set_sniff_status(
+                "This profile has no registers to sniff yet.", "warning"
+            )
+            return
+        if self._editing:
+            self._set_sniff_status(
+                "Finish editing (Save or Discard) before starting passive sniffing.",
+                "warning",
+            )
+            return
+
+        port = self._selected_sniff_port()
+        parity_word = str(profile.get("parity", "None"))
+        try:
+            self.sniff_capture_service.start_configured(
+                SerialSettings(
+                    port=port,
+                    baudrate=int(profile.get("baudrate", 9600)),
+                    parity=_PROFILE_PARITY_TO_SERIAL_CODE.get(parity_word, "N"),
+                    stopbits=float(profile.get("stop_bits", 1.0)),
+                )
+            )
+        except (ConfigurationError, TypeError, ValueError) as error:
+            self._set_sniff_status(f"Invalid passive sniffing setting: {error}", "warning")
+            return
+
+        log_event(
+            logging.INFO,
+            "profile_sniffing_started",
+            profile_id=profile.get("id"),
+            profile_name=profile.get("name"),
+            port=port,
+        )
+        self._mark_all_rows_sniff_status("Waiting for data...")
+        self._set_sniff_status(
+            f"Opening {port} in receive-only mode for \"{profile.get('name', 'this profile')}\"...",
+            "info",
+        )
+
+    def stop_sniffing(self) -> None:
+        if self.sniff_capture_service.worker is None:
+            return
+        self.sniff_toggle_btn.setText("Stopping...")
+        self.sniff_toggle_btn.setEnabled(False)
+        self.sniff_capture_service.stop()
+
+    def _on_sniff_running_changed(self, running: bool) -> None:
+        self.sniff_toggle_btn.setEnabled(True)
+        self.sniff_toggle_btn.setText(
+            "Stop Passive Sniffing" if running else "Start Passive Sniffing"
+        )
+        self.sniff_port_combo.setEnabled(not running)
+        self.sniff_refresh_btn.setEnabled(not running)
+        self._set_profile_management_enabled(not running)
+        if not running:
+            self._mark_all_rows_sniff_status("Sniffing stopped")
+            profile = self._current_profile()
+            log_event(
+                logging.INFO,
+                "profile_sniffing_stopped",
+                profile_id=profile.get("id") if profile else None,
+            )
+
+    def _on_sniff_status(self, message: str) -> None:
+        self._set_sniff_status(message, "info")
+
+    def _on_sniff_error(self, message: str) -> None:
+        # Already logged distinctly by PassiveCaptureService itself
+        # (capture_worker_error); this only needs to surface it in the UI.
+        self._set_sniff_status(message, "warning")
+
+    def _set_sniff_status(self, text: str, kind: str = "info") -> None:
+        self.sniff_status_label.setStyleSheet(_STATUS_STYLES.get(kind, _STATUS_STYLES["info"]))
+        self.sniff_status_label.setText(text)
+
+    def _set_profile_management_enabled(self, enabled: bool) -> None:
+        """Lock profile selection/editing while this profile is being sniffed.
+
+        Switching or editing the active profile mid-capture would leave the
+        running worker matching frames against a profile it was never
+        configured for. Re-enabling on stop restores exactly the buttons
+        _load_current_profile() would already enable for the current
+        profile/no-profile state.
+        """
+        self.profile_list.setEnabled(enabled)
+        self.add_profile_btn.setEnabled(enabled)
+        self.remove_profile_btn.setEnabled(enabled)
+        self.edit_profile_btn.setEnabled(enabled and self._current_profile() is not None)
+
+    def _refresh_sniff_cells(self, row: int, timestamp_text: str, status_text: str) -> None:
+        """Update only the Timestamp/Status columns for one row, in place."""
+        timestamp_item = self.register_table.item(row, _TIMESTAMP_COLUMN)
+        status_item = self.register_table.item(row, _STATUS_COLUMN)
+        if timestamp_item is None or status_item is None:
+            return
+        self.register_table.blockSignals(True)
+        try:
+            timestamp_item.setText(timestamp_text)
+            status_item.setText(status_text)
+        finally:
+            self.register_table.blockSignals(False)
+
+    def _mark_all_rows_sniff_status(self, status_text: str) -> None:
+        """Set the Status column for every row without touching anything else."""
+        self.register_table.blockSignals(True)
+        try:
+            for row in range(self.register_table.rowCount()):
+                item = self.register_table.item(row, _STATUS_COLUMN)
+                if item is not None:
+                    item.setText(status_text)
+        finally:
+            self.register_table.blockSignals(False)
+
+    def shutdown(self, timeout_ms: int = SERIAL_SHUTDOWN_TIMEOUT_MS) -> bool:
+        """Stop this tab's own sniffing worker and wait for cleanup.
+
+        Mirrors PassiveSniffingWidget.shutdown() so MainWindow.closeEvent
+        can stop both tabs' capture workers the same way.
+        """
+        return self.sniff_capture_service.shutdown(timeout_ms)
+
+    def _apply_filter(self) -> None:
+        query = self.search_edit.text().strip().lower()
+        function_code = self.function_code_filter.currentData()
+
+        for row in range(self.register_table.rowCount()):
+            item_name = self.register_table.item(row, 0)
+            item_description = self.register_table.item(row, 8)
+            if item_name is None:
+                self.register_table.setRowHidden(row, False)
+                continue
+            name = item_name.text().lower()
+            description = item_description.text().lower() if item_description else ""
+            matches = (not query or query in name or query in description)
+            if function_code is not None:
+                profile = self._current_profile()
+                if profile is not None and row < len(profile["registers"]):
+                    matches = matches and profile["registers"][row].get("function_code") == function_code
+            self.register_table.setRowHidden(row, not matches)
+
+    def reset_filter(self) -> None:
+        self.search_edit.clear()
+        self.function_code_filter.setCurrentIndex(0)
+        self._apply_filter()
+
+    def add_profile_from_data(self, profile_dict: dict) -> None:
+        if not profile_dict.get("id"):
+            profile_dict["id"] = uuid.uuid4().hex
+        if "registers" not in profile_dict:
+            profile_dict["registers"] = []
+        self.profiles.append(profile_dict)
+        self.save_profiles_to_json()
+        self._refresh_profile_list()
+        self._set_active_profile(profile_dict["id"])
+        self.enter_edit_mode()

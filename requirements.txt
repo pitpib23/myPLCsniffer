@@ -1,0 +1,5 @@
+# Desktop user interface
+PySide6>=6.9.0
+
+# Receive-only serial communication
+pyserial>=3.5

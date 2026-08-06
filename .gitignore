@@ -1,0 +1,22 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+assets/
+
+# Application runtime data
+logs/
+*.log
+plcsniffer/profile.json
+
+# PyInstaller output
+build/
+dist/
+*.spec
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
