@@ -4,7 +4,6 @@ import copy
 import json
 import logging
 import uuid
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -32,7 +31,7 @@ from PySide6.QtWidgets import (
 from plcsniffer.capture import PassiveCaptureService
 from plcsniffer.config import SERIAL_SHUTDOWN_TIMEOUT_MS, SerialSettings
 from plcsniffer.exceptions import ConfigurationError
-from plcsniffer.logging_config import log_event
+from plcsniffer.logging_config import application_data_directory, log_event
 from plcsniffer.modbus import (
     CapturedModbusFrame,
     FUNCTION_NAMES,
@@ -93,7 +92,13 @@ class FunctionCodeDelegate(QStyledItemDelegate):
 class ProfileTab(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.profile_json_path = Path(__file__).resolve().parent.parent / "profile.json"
+        # Same writable-location logic logging_config.py already uses for the
+        # log file: project root during development, but a proper per-user
+        # app-data directory (%LOCALAPPDATA%\myPLCsniffer, or ~/.myPLCsniffer
+        # as a fallback) once packaged — a frozen build's own install
+        # directory is often read-only, so saved profiles need to live
+        # somewhere else to actually persist between runs.
+        self.profile_json_path = application_data_directory() / "profile.json"
         self.profiles: list[dict] = []
         self.current_profile_id: str | None = None
         self._ignore_changes = False

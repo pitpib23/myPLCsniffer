@@ -8,7 +8,7 @@ assets/
 # Application runtime data
 logs/
 *.log
-plcsniffer/profile.json
+profile.json
 
 # PyInstaller output
 build/
