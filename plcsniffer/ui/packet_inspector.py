@@ -71,7 +71,6 @@ class PacketInspectorWidget(QWidget):
         self.show_all_btn = QPushButton("Show All Packet Information")
         self.show_all_btn.setCheckable(True)
         self.show_all_btn.setEnabled(False)
-        self.show_all_btn.setProperty("role", "primary")
         self.show_all_btn.toggled.connect(self._toggle_all_information)
         summary_layout.addWidget(self.show_all_btn)
 

@@ -11,8 +11,11 @@ import serial
 from PySide6.QtCore import QThread, Signal
 
 from plcsniffer.config import (
+    AUTO_ALL_PARITIES,
+    AUTO_ALL_STOP_BITS,
     AUTO_BAUD_RATE_PRIORITY,
     AUTO_FRAME_MARGIN_SECONDS,
+    AUTO_FRAMING_PRIORITY,
     AUTO_RETRY_DELAY_SECONDS,
     DEFAULT_AUTO_DETECTION_WINDOW_SECONDS,
     MINIMUM_FRAME_GAP_SECONDS,
@@ -587,6 +590,8 @@ class PassiveAutoDetectThread(PassiveSerialReaderThread):
         baudrates=DEFAULT_BAUDRATES,
         parent=None,
         *,
+        parities=AUTO_ALL_PARITIES,
+        stop_bits_options=AUTO_ALL_STOP_BITS,
         detection_window_s: float = DEFAULT_AUTO_DETECTION_WINDOW_SECONDS,
     ) -> None:
         normalized = tuple(dict.fromkeys(int(value) for value in baudrates))
@@ -594,25 +599,40 @@ class PassiveAutoDetectThread(PassiveSerialReaderThread):
             raise ValueError(
                 "At least one positive auto-detection baud rate is required."
             )
+        normalized_parities = tuple(dict.fromkeys(str(value) for value in parities))
+        if not normalized_parities:
+            raise ValueError("At least one auto-detection parity is required.")
+        normalized_stop_bits = tuple(
+            dict.fromkeys(float(value) for value in stop_bits_options)
+        )
+        if not normalized_stop_bits:
+            raise ValueError("At least one auto-detection stop-bit option is required.")
         preferred = tuple(
             value for value in self.DEFAULT_BAUDRATES if value in normalized
         ) + tuple(value for value in normalized if value not in self.DEFAULT_BAUDRATES)
         super().__init__(port, preferred[0], parent=parent)
         self.baudrates = preferred
+        self.parities = normalized_parities
+        self.stop_bits_options = normalized_stop_bits
         self._tested_baudrates: list[int] = []
         self.detection_window_s = max(0.1, float(detection_window_s))
+        # Grows by one second every time a full sweep across every candidate
+        # setting finds nothing (see run()'s retry branch), so traffic that's
+        # sent less often than the base window — e.g. once every 2s against a
+        # sub-second default — eventually gets caught instead of the sweep
+        # moving on before a message ever arrives. Reset per Start click,
+        # since each Start creates a fresh thread instance.
+        self._window_growth_s: float = 0.0
 
     def _candidate_settings(self):
-        framing = (
-            ("N", 1.0),
-            ("E", 1.0),
-            ("O", 1.0),
-            ("N", 2.0),
-            ("E", 2.0),
-            ("O", 2.0),
-            ("N", 1.5),
-            ("E", 1.5),
-            ("O", 1.5),
+        # Filters the shared priority-ordered list down to only the parity/
+        # stop-bit combinations actually requested (see AutoDetectionSettings),
+        # instead of always sweeping all nine — narrower selections mean fewer
+        # combinations per baud rate and a faster sweep.
+        framing = tuple(
+            (parity, stopbits)
+            for parity, stopbits in AUTO_FRAMING_PRIORITY
+            if parity in self.parities and stopbits in self.stop_bits_options
         )
         return product(self.baudrates, framing)
 
@@ -621,9 +641,8 @@ class PassiveAutoDetectThread(PassiveSerialReaderThread):
             1 + self.bytesize + (0 if self.parity == "N" else 1) + self.stopbits
         )
         longest_frame_time = MODBUS_MAX_RTU_FRAME_BYTES * character_bits / self.baudrate
-        return max(
-            self.detection_window_s, longest_frame_time + AUTO_FRAME_MARGIN_SECONDS
-        )
+        effective_window = self.detection_window_s + self._window_growth_s
+        return max(effective_window, longest_frame_time + AUTO_FRAME_MARGIN_SECONDS)
 
     @staticmethod
     def _is_plausible_modbus_frame(raw: bytes) -> bool:
@@ -741,9 +760,18 @@ class PassiveAutoDetectThread(PassiveSerialReaderThread):
                     )
                     return
                 if not locked and not self._stop_event.is_set():
+                    self._window_growth_s += 1.0
+                    next_window = self.detection_window_s + self._window_growth_s
                     self.status.emit(
                         "No valid Modbus packet found in this auto-detection pass; "
-                        "continuing to listen and retry."
+                        f"increasing listen time to {next_window:g}s per setting "
+                        "and retrying."
+                    )
+                    log_event(
+                        logging.INFO,
+                        "auto_detection_window_increased",
+                        port=self.port,
+                        window_seconds=next_window,
                     )
                     self._stop_event.wait(AUTO_RETRY_DELAY_SECONDS)
         except (OSError, serial.SerialException) as error:

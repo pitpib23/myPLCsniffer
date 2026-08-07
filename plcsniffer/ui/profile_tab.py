@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QSpinBox,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -37,13 +38,7 @@ from plcsniffer.modbus import (
     FUNCTION_NAMES,
     MODICON_BLOCK_OFFSET,
 )
-
-_STATUS_STYLES = {
-    "info": "color: #526174;",
-    "editing": "color: #b45309; font-weight: 600;",
-    "saved": "color: #166534; font-weight: 600;",
-    "warning": "color: #b91c1c; font-weight: 600;",
-}
+from plcsniffer.ui.style import STATUS_STYLES
 
 # Profile Configuration's parity_combo (see _build_config_form) stores the
 # full word ("None"/"Even"/"Odd") rather than the single-letter code
@@ -57,6 +52,42 @@ _PROFILE_PARITY_TO_SERIAL_CODE = {"None": "N", "Even": "E", "Odd": "O"}
 # _refresh_sniff_cells, and _mark_all_rows_sniff_status all need to agree on them.
 _TIMESTAMP_COLUMN = 9
 _STATUS_COLUMN = 10
+
+
+class FunctionCodeDelegate(QStyledItemDelegate):
+    """Combo-box editor for the register table's Function Code column.
+
+    Replaces free-typed entry ("3" / "0x03" / the full display string) with
+    picking a named function from a list — no legend needed to know what
+    values are valid. Options come from modbus.FUNCTION_NAMES; the display
+    text and the text committed back to the cell reuse
+    ProfileTab._function_code_display() exactly, so
+    ProfileTab._parse_function_code() (used by _on_cell_changed) keeps
+    working completely unchanged.
+    """
+
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        combo.setEditable(False)
+        for code, name in sorted(FUNCTION_NAMES.items()):
+            combo.addItem(f"0x{code:02X} {name}", code)
+        # Combo-box editors don't auto-commit on selection the way a line
+        # edit commits on focus-out, so wire it explicitly.
+        combo.activated.connect(lambda _index, c=combo: self._commit_and_close(c))
+        return combo
+
+    def _commit_and_close(self, editor: QComboBox) -> None:
+        self.commitData.emit(editor)
+        self.closeEditor.emit(editor)
+
+    def setEditorData(self, editor: QComboBox, index) -> None:
+        text = index.data(Qt.EditRole) or ""
+        code = ProfileTab._parse_function_code(text)
+        editor.setCurrentIndex(editor.findData(code))
+
+    def setModelData(self, editor: QComboBox, model, index) -> None:
+        code = editor.currentData()
+        model.setData(index, ProfileTab._function_code_display(code), Qt.EditRole)
 
 
 class ProfileTab(QWidget):
@@ -153,8 +184,10 @@ class ProfileTab(QWidget):
 
         button_layout = QHBoxLayout()
         self.add_profile_btn = QPushButton("Add")
+        self.add_profile_btn.setToolTip("Add a new profile")
         self.add_profile_btn.clicked.connect(self.add_profile)
         self.remove_profile_btn = QPushButton("Remove")
+        self.remove_profile_btn.setToolTip("Remove the selected profile")
         self.remove_profile_btn.clicked.connect(self.remove_profile)
         button_layout.addWidget(self.add_profile_btn)
         button_layout.addWidget(self.remove_profile_btn)
@@ -216,7 +249,8 @@ class ProfileTab(QWidget):
         self.toggle_nav_btn.setToolTip("Hide the profile list to give the summary more room")
         self.toggle_nav_btn.clicked.connect(self._toggle_nav_panel)
         row.addWidget(self.toggle_nav_btn)
-        row.addSpacing(12)
+
+        row.addStretch()
 
         self.edit_profile_btn = QPushButton("Edit Profile")
         self.edit_profile_btn.clicked.connect(self.enter_edit_mode)
@@ -231,12 +265,11 @@ class ProfileTab(QWidget):
         self.discard_changes_btn.clicked.connect(self.discard_changes)
         row.addWidget(self.discard_changes_btn)
 
-        row.addStretch()
         parent_layout.addLayout(row)
 
         self.edit_status_label = QLabel("Select a profile to view its details.")
         self.edit_status_label.setWordWrap(True)
-        self.edit_status_label.setStyleSheet(_STATUS_STYLES["info"])
+        self.edit_status_label.setStyleSheet(STATUS_STYLES["info"])
         parent_layout.addWidget(self.edit_status_label)
 
     def _build_name_row(self, parent_layout: QVBoxLayout) -> None:
@@ -320,17 +353,17 @@ class ProfileTab(QWidget):
         self.function_code_filter.currentIndexChanged.connect(self._apply_filter)
         row.addWidget(self.function_code_filter, 1)
 
-        self.reset_filter_btn = QPushButton("Reset Filter")
-        self.reset_filter_btn.clicked.connect(self.reset_filter)
-        row.addWidget(self.reset_filter_btn)
+        self.reset_filters_btn = QPushButton("Reset Filters")
+        self.reset_filters_btn.clicked.connect(self.reset_filters)
+        row.addWidget(self.reset_filters_btn)
 
         row.addSpacing(16)
 
-        self.add_register_btn = QPushButton("Add register")
+        self.add_register_btn = QPushButton("Add Register")
         self.add_register_btn.clicked.connect(self.add_register)
         row.addWidget(self.add_register_btn)
 
-        self.remove_register_btn = QPushButton("Remove register")
+        self.remove_register_btn = QPushButton("Remove Register")
         self.remove_register_btn.clicked.connect(self.remove_register)
         row.addWidget(self.remove_register_btn)
 
@@ -351,7 +384,7 @@ class ProfileTab(QWidget):
         row.addWidget(QLabel("Sniff port"))
         self.sniff_port_combo = QComboBox()
         self.sniff_port_combo.setEditable(True)
-        self.sniff_port_combo.setMinimumWidth(200)
+        self.sniff_port_combo.setMinimumWidth(350)
         row.addWidget(self.sniff_port_combo)
 
         self.sniff_refresh_btn = QPushButton("Refresh Ports")
@@ -360,6 +393,10 @@ class ProfileTab(QWidget):
 
         self.sniff_toggle_btn = QPushButton("Start Passive Sniffing")
         self.sniff_toggle_btn.setProperty("role", "primary")
+        # Matches Tab 1's start_btn height exactly — same recurring action
+        # (Start/Stop Passive Sniffing) gets the same visual weight on both
+        # tabs.
+        self.sniff_toggle_btn.setMinimumHeight(38)
         self.sniff_toggle_btn.clicked.connect(self.toggle_sniffing)
         row.addWidget(self.sniff_toggle_btn)
         row.addStretch()
@@ -369,7 +406,7 @@ class ProfileTab(QWidget):
             "Not sniffing. Select a profile with registers, choose a port, and click Start."
         )
         self.sniff_status_label.setWordWrap(True)
-        self.sniff_status_label.setStyleSheet(_STATUS_STYLES["info"])
+        self.sniff_status_label.setStyleSheet(STATUS_STYLES["info"])
         parent_layout.addWidget(self.sniff_status_label)
 
         self._refresh_sniff_ports()
@@ -416,15 +453,23 @@ class ProfileTab(QWidget):
         # the whole page scrolling.
         self.register_table.setMinimumHeight(220)
         self.register_table.cellChanged.connect(self._on_cell_changed)
+
+        self.function_code_delegate = FunctionCodeDelegate(self.register_table)
+        self.register_table.setItemDelegateForColumn(1, self.function_code_delegate)
+
         parent_layout.addWidget(self.register_table, stretch=1)
 
         header_tooltips = {
+            0: "Friendly label for this register, shown throughout the app.",
             1: "Which Modbus read produced this register, e.g. 0x03 = Read Holding Registers.",
             2: "Raw, zero-based register address exactly as seen on the wire.",
             3: "Standard Modicon reference number, derived automatically from "
             "Function Code + Register (e.g. 0x03 + Register 0 -> 40001). Read-only.",
             4: "Fills in automatically from a matching sniffed response packet.",
+            5: "Scale factor applied to the raw value to produce Parsed Value.",
             6: "Fills in automatically: Raw Hex Value × Multiplier.",
+            7: "Unit label shown next to the parsed value, e.g. °C or kWh.",
+            8: "Free-form notes about this register.",
             _TIMESTAMP_COLUMN: "When this row last matched a sniffed response packet.",
             _STATUS_COLUMN: "Passive-sniffing state for this row: not sniffed yet, "
             "waiting for data, updated, or stopped.",
@@ -459,7 +504,7 @@ class ProfileTab(QWidget):
             self.profile_list.addItem(item)
 
     def _set_status(self, text: str, kind: str = "info") -> None:
-        self.edit_status_label.setStyleSheet(_STATUS_STYLES.get(kind, _STATUS_STYLES["info"]))
+        self.edit_status_label.setStyleSheet(STATUS_STYLES.get(kind, STATUS_STYLES["info"]))
         self.edit_status_label.setText(text)
 
     # ------------------------------------------------------------------
@@ -990,13 +1035,15 @@ class ProfileTab(QWidget):
             return ""
         return f"{offset + address:05d}"
 
-    def _function_code_display(self, function_code: int | None) -> str:
+    @staticmethod
+    def _function_code_display(function_code: int | None) -> str:
         if function_code is None:
             return ""
         name = FUNCTION_NAMES.get(function_code)
         return f"0x{function_code:02X} {name}" if name else f"0x{function_code:02X}"
 
-    def _parse_function_code(self, text: str) -> int | None:
+    @staticmethod
+    def _parse_function_code(text: str) -> int | None:
         text = text.strip()
         if not text:
             return None
@@ -1207,7 +1254,7 @@ class ProfileTab(QWidget):
         self._set_sniff_status(message, "warning")
 
     def _set_sniff_status(self, text: str, kind: str = "info") -> None:
-        self.sniff_status_label.setStyleSheet(_STATUS_STYLES.get(kind, _STATUS_STYLES["info"]))
+        self.sniff_status_label.setStyleSheet(STATUS_STYLES.get(kind, STATUS_STYLES["info"]))
         self.sniff_status_label.setText(text)
 
     def _set_profile_management_enabled(self, enabled: bool) -> None:
@@ -1275,7 +1322,7 @@ class ProfileTab(QWidget):
                     matches = matches and profile["registers"][row].get("function_code") == function_code
             self.register_table.setRowHidden(row, not matches)
 
-    def reset_filter(self) -> None:
+    def reset_filters(self) -> None:
         self.search_edit.clear()
         self.function_code_filter.setCurrentIndex(0)
         self._apply_filter()

@@ -11,6 +11,8 @@ from serial.tools import list_ports
 from serial.tools.list_ports_common import ListPortInfo
 
 from plcsniffer.config import (
+    AUTO_ALL_PARITIES,
+    AUTO_ALL_STOP_BITS,
     AUTO_BAUD_RATE_PRIORITY,
     SERIAL_SHUTDOWN_TIMEOUT_MS,
     AutoDetectionSettings,
@@ -25,8 +27,10 @@ from plcsniffer.modbus import (
 )
 from plcsniffer.validation import (
     validate_baudrate,
+    validate_parity,
     validate_port,
     validate_serial_settings,
+    validate_stopbits,
 )
 
 
@@ -113,7 +117,8 @@ class PassiveCaptureService(QObject):
         """Start receive-only serial-format detection on one selected port.
 
         Args:
-            settings: Candidate baud rates and minimum observation window.
+            settings: Candidate baud rates, parities, stop bits, and minimum
+                observation window per combination.
 
         Raises:
             ConfigurationError: If capture is already active or settings are
@@ -123,6 +128,14 @@ class PassiveCaptureService(QObject):
         baudrates = tuple(validate_baudrate(value) for value in settings.baudrates)
         if not baudrates:
             baudrates = AUTO_BAUD_RATE_PRIORITY
+        parities = tuple(validate_parity(value) for value in settings.parities)
+        if not parities:
+            parities = AUTO_ALL_PARITIES
+        stop_bits_options = tuple(
+            validate_stopbits(value) for value in settings.stop_bits_options
+        )
+        if not stop_bits_options:
+            stop_bits_options = AUTO_ALL_STOP_BITS
         if settings.minimum_window_seconds <= 0:
             raise ConfigurationError(
                 "Auto-detection observation window must be greater than zero."
@@ -130,6 +143,8 @@ class PassiveCaptureService(QObject):
         worker = PassiveAutoDetectThread(
             port=port,
             baudrates=baudrates,
+            parities=parities,
+            stop_bits_options=stop_bits_options,
             parent=self,
             detection_window_s=settings.minimum_window_seconds,
         )

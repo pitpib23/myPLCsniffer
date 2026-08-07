@@ -181,15 +181,25 @@ class PassiveSniffingWidgetTests(QtWidgetTestCase):
             self.assertTrue(widget.baud_combo.isEnabled())
             self.assertTrue(widget.parity_combo.isEnabled())
             self.assertTrue(widget.stopbits_combo.isEnabled())
+            self.assertEqual(widget.mode_settings_stack.currentIndex(), 0)
 
             widget.capture_mode_combo.setCurrentIndex(
                 widget.capture_mode_combo.findData("auto")
             )
             self.assertTrue(widget.port_combo.isEnabled())
-            self.assertFalse(widget.baud_combo.isEnabled())
-            self.assertFalse(widget.parity_combo.isEnabled())
-            self.assertFalse(widget.stopbits_combo.isEnabled())
+            # Config mode's row is hidden (not disabled) behind the stacked
+            # widget once Auto mode's own row is showing; Auto mode's own
+            # candidate pickers are what should be interactive here, and
+            # nothing is checked in them by default.
+            self.assertEqual(widget.mode_settings_stack.currentIndex(), 1)
+            self.assertTrue(widget.auto_baud_combo.isEnabled())
+            self.assertTrue(widget.auto_parity_combo.isEnabled())
+            self.assertTrue(widget.auto_stopbits_combo.isEnabled())
+            self.assertEqual(widget.auto_baud_combo.checked_values(), [])
+            self.assertEqual(widget.auto_parity_combo.checked_values(), [])
+            self.assertEqual(widget.auto_stopbits_combo.checked_values(), [])
             self.assertIn("CRC-valid", widget.mode_hint.text())
+            self.assertIn("0 combination(s) selected", widget.mode_hint.text())
 
             widget._on_auto_configuration(
                 {"baudrate": 19200, "parity": "E", "stopbits": 2.0}
@@ -208,6 +218,33 @@ class PassiveSniffingWidgetTests(QtWidgetTestCase):
             self.assertFalse(widget.capture_mode_combo.isEnabled())
             self.assertFalse(widget.port_combo.isEnabled())
             widget.capture_service._worker = None
+        finally:
+            self.close_widget(widget)
+
+    def test_auto_mode_requires_checked_candidates_before_start(self):
+        widget = self.make_widget()
+        try:
+            widget.capture_mode_combo.setCurrentIndex(
+                widget.capture_mode_combo.findData("auto")
+            )
+            widget.port_combo.setEditText("COM-TEST")
+
+            with patch.object(PassiveCaptureService, "start_automatic") as start:
+                widget.start_monitor()
+                start.assert_not_called()
+            self.assertIn("Check at least one", widget.status_label.text())
+
+            widget.auto_baud_combo.set_checked(9600)
+            widget.auto_parity_combo.set_checked("N")
+            widget.auto_stopbits_combo.set_checked(1.0)
+
+            with patch.object(PassiveCaptureService, "start_automatic") as start:
+                widget.start_monitor()
+                start.assert_called_once()
+                settings = start.call_args.args[0]
+            self.assertEqual(settings.baudrates, (9600,))
+            self.assertEqual(settings.parities, ("N",))
+            self.assertEqual(settings.stop_bits_options, (1.0,))
         finally:
             self.close_widget(widget)
 

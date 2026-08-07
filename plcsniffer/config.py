@@ -39,12 +39,26 @@ AUTO_BAUD_RATE_PRIORITY = (
 )
 VALID_PARITIES = frozenset({"N", "E", "O", "M", "S"})
 VALID_STOP_BITS = frozenset({1.0, 1.5, 2.0})
+# Every parity/stop-bit combination Auto mode is willing to try, in the
+# priority order it tries them: 1 stop bit across all parities first (most
+# common framing), then 2, then 1.5. AutoDetectionSettings lets a caller
+# narrow which combinations actually get swept — see
+# PassiveAutoDetectThread._candidate_settings(), which filters this list
+# down to the requested parities/stop-bit options rather than recomputing
+# the order itself.
+AUTO_FRAMING_PRIORITY = (
+    ("N", 1.0), ("E", 1.0), ("O", 1.0),
+    ("N", 2.0), ("E", 2.0), ("O", 2.0),
+    ("N", 1.5), ("E", 1.5), ("O", 1.5),
+)
+AUTO_ALL_PARITIES = ("N", "E", "O")
+AUTO_ALL_STOP_BITS = (1.0, 2.0, 1.5)
 MODBUS_MIN_UNIT_ID = 0
 MODBUS_MAX_UNIT_ID = 247
 MODBUS_MAX_RTU_FRAME_BYTES = 260
 SERIAL_READ_TIMEOUT_SECONDS = 0.02
 MINIMUM_FRAME_GAP_SECONDS = 0.004
-DEFAULT_AUTO_DETECTION_WINDOW_SECONDS = 0.65
+DEFAULT_AUTO_DETECTION_WINDOW_SECONDS = 0.5
 AUTO_FRAME_MARGIN_SECONDS = 0.05
 AUTO_RETRY_DELAY_SECONDS = 0.05
 
@@ -84,8 +98,19 @@ class SerialSettings:
 
 @dataclass(frozen=True)
 class AutoDetectionSettings:
-    """Settings used by receive-only serial-format detection."""
+    """Settings used by receive-only serial-format detection.
+
+    Attributes:
+        port: Operating-system serial port name.
+        baudrates: Candidate baud rates to sweep.
+        parities: Candidate parity codes to sweep.
+        stop_bits_options: Candidate stop-bit counts to sweep.
+        minimum_window_seconds: Seconds to listen on each combination before
+            moving to the next.
+    """
 
     port: str
     baudrates: tuple[int, ...] = AUTO_BAUD_RATE_PRIORITY
+    parities: tuple[str, ...] = AUTO_ALL_PARITIES
+    stop_bits_options: tuple[float, ...] = AUTO_ALL_STOP_BITS
     minimum_window_seconds: float = DEFAULT_AUTO_DETECTION_WINDOW_SECONDS

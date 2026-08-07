@@ -4,8 +4,8 @@ import csv
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -17,16 +17,21 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
+    QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from plcsniffer.config import (
+    AUTO_ALL_PARITIES,
+    AUTO_ALL_STOP_BITS,
     CAPTURE_TABLE_MINIMUM_HEIGHT,
-    DEFAULT_AUTO_DETECTION_WINDOW_SECONDS,
     DEFAULT_BAUD_RATES,
     FILTER_DEBOUNCE_MS,
 )
@@ -38,6 +43,94 @@ from plcsniffer.config import (
 from plcsniffer.exceptions import ConfigurationError
 from plcsniffer.modbus import CapturedModbusFrame, REGISTER_TYPE_NOUNS
 from plcsniffer.capture import PassiveCaptureService
+from plcsniffer.ui.style import STATUS_STYLES
+
+
+class CheckableComboBox(QComboBox):
+    """Closed combo box whose dropdown lists independently checkable items.
+
+    Used for Auto mode's baud-rate/parity/stop-bit candidate pickers, so the
+    sweep only tries what the user actually selects instead of always
+    trying every possibility. The closed box shows a short summary (e.g.
+    "9600, 19200" or "3 selected") instead of one value, and the dropdown
+    stays open while checking/unchecking items so picking several doesn't
+    mean reopening it each time.
+    """
+
+    selection_changed = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setFocusPolicy(Qt.NoFocus)
+        self.setInsertPolicy(QComboBox.NoInsert)
+        self._item_model = QStandardItemModel(self)
+        self.setModel(self._item_model)
+        # Intercept clicks inside the popup ourselves (and consume the
+        # event) so toggling a checkbox doesn't also trigger QComboBox's
+        # normal "select this item and close the popup" behavior.
+        self.view().viewport().installEventFilter(self)
+        self._refresh_display_text()
+
+    def add_item(self, text: str, data, *, checked: bool = False) -> None:
+        item = QStandardItem(text)
+        item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        item.setData(data, Qt.UserRole)
+        self._item_model.appendRow(item)
+        self._refresh_display_text()
+
+    def checked_values(self) -> list:
+        return [
+            self._item_model.item(row).data(Qt.UserRole)
+            for row in range(self._item_model.rowCount())
+            if self._item_model.item(row).checkState() == Qt.Checked
+        ]
+
+    def set_checked(self, data, checked: bool = True) -> None:
+        """Check or uncheck the existing item whose data equals *data*.
+
+        No-op if no item matches. Lets callers (tests, saved-selection
+        restore) toggle a specific candidate without reaching into the
+        private item model.
+        """
+        for row in range(self._item_model.rowCount()):
+            item = self._item_model.item(row)
+            if item.data(Qt.UserRole) == data:
+                item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+                self._refresh_display_text()
+                return
+
+    def eventFilter(self, watched, event) -> bool:
+        if (
+            watched is self.view().viewport()
+            and event.type() == QEvent.MouseButtonRelease
+        ):
+            index = self.view().indexAt(event.pos())
+            if index.isValid():
+                item = self._item_model.item(index.row())
+                item.setCheckState(
+                    Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                )
+                self._refresh_display_text()
+                self.selection_changed.emit()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _refresh_display_text(self) -> None:
+        checked = [
+            self._item_model.item(row).text()
+            for row in range(self._item_model.rowCount())
+            if self._item_model.item(row).checkState() == Qt.Checked
+        ]
+        if not checked:
+            text = "None selected"
+        elif len(checked) <= 3:
+            text = ", ".join(checked)
+        else:
+            text = f"{len(checked)} selected"
+        self.lineEdit().setText(text)
 
 
 class PassiveSniffingWidget(QWidget):
@@ -70,18 +163,19 @@ class PassiveSniffingWidget(QWidget):
 
     def _connect_capture_service(self) -> None:
         self.capture_service.frame_received.connect(self._on_frame)
-        self.capture_service.status_changed.connect(self.status_label.setText)
+        self.capture_service.status_changed.connect(self._set_status_message)
         self.capture_service.error_occurred.connect(self._on_error)
         self.capture_service.statistics_changed.connect(self._on_statistics)
         self.capture_service.configuration_detected.connect(self._on_auto_configuration)
         self.capture_service.running_changed.connect(self._on_running_changed)
 
-    def _set_status_message(self, message: str) -> None:
+    def _set_status_message(self, message: str, kind: str = "info") -> None:
+        self.status_label.setStyleSheet(STATUS_STYLES.get(kind, STATUS_STYLES["info"]))
         self.status_label.setText(message)
 
     def current_profile_data(self) -> dict | None:
         if self.message_table.rowCount() == 0:
-            self._set_status_message("Need to sniff something first.")
+            self._set_status_message("Need to sniff something first.", "warning")
             return None
 
         rows = [
@@ -90,12 +184,12 @@ class PassiveSniffingWidget(QWidget):
             if self._frame_for_row(row) is not None
         ]
         if not rows:
-            self._set_status_message("Need to sniff something first.")
+            self._set_status_message("Need to sniff something first.", "warning")
             return None
 
         slave_ids = {frame.slave_id for frame in rows}
         if len(slave_ids) > 1:
-            self._set_status_message("Need to have only one slave id when save.")
+            self._set_status_message("Need to have only one slave ID to save.", "warning")
             return None
 
         response_frames = [
@@ -104,7 +198,9 @@ class PassiveSniffingWidget(QWidget):
             if frame.frame_type.startswith("Response") or frame.direction == "Slave → Master"
         ]
         if not response_frames:
-            self._set_status_message("Need to sniff a response before saving a profile.")
+            self._set_status_message(
+                "Need to sniff a response before saving a profile.", "warning"
+            )
             return None
 
         slave_id = next(iter(slave_ids))
@@ -129,7 +225,9 @@ class PassiveSniffingWidget(QWidget):
                 }
 
         if not register_rows:
-            self._set_status_message("Need response register values to build a profile.")
+            self._set_status_message(
+                "Need response register values to build a profile.", "warning"
+            )
             return None
 
         addresses = sorted(register_rows)
@@ -154,7 +252,8 @@ class PassiveSniffingWidget(QWidget):
         self.profile_captured.emit(data)
         self._set_status_message(
             f"Captured {len(data['registers'])} register(s) for slave {data['slave_id']}. "
-            "Review and save it on the Profile tab."
+            "Review and save it on the Profile tab.",
+            "saved",
         )
 
     def _build_ui(self) -> None:
@@ -201,6 +300,47 @@ class PassiveSniffingWidget(QWidget):
         self.stopbits_combo.addItem("1.5", 1.5)
         self.stopbits_combo.addItem("2", 2.0)
 
+        # Auto mode's own settings row: which baud rates/parities/stop bits
+        # to actually sweep (checkable — nothing checked by default, so a
+        # sweep is never started without the user deliberately picking
+        # candidates) and how long to listen on each combination before
+        # moving to the next. Too short and traffic sent less often than
+        # this window can be missed entirely — the sweep moves on before a
+        # message ever arrives. If a full sweep of every checked combination
+        # finds nothing, PassiveAutoDetectThread automatically adds 1 second
+        # to this for the next sweep (see its _window_growth_s), so sparser
+        # traffic eventually gets caught without the user re-guessing.
+        self.auto_baud_combo = CheckableComboBox()
+        for rate in self.BAUDRATES:
+            self.auto_baud_combo.add_item(str(rate), rate)
+        self.auto_baud_combo.setMinimumWidth(150)
+        self.auto_baud_combo.setToolTip("Baud rates Auto mode will try.")
+        self.auto_baud_combo.selection_changed.connect(self._update_mode_ui)
+
+        self.auto_parity_combo = CheckableComboBox()
+        for label, value in (("None", "N"), ("Even", "E"), ("Odd", "O")):
+            self.auto_parity_combo.add_item(label, value)
+        self.auto_parity_combo.setMinimumWidth(120)
+        self.auto_parity_combo.setToolTip("Parity settings Auto mode will try.")
+        self.auto_parity_combo.selection_changed.connect(self._update_mode_ui)
+
+        self.auto_stopbits_combo = CheckableComboBox()
+        for label, value in (("1", 1.0), ("1.5", 1.5), ("2", 2.0)):
+            self.auto_stopbits_combo.add_item(label, value)
+        self.auto_stopbits_combo.setMinimumWidth(120)
+        self.auto_stopbits_combo.setToolTip("Stop-bit settings Auto mode will try.")
+        self.auto_stopbits_combo.selection_changed.connect(self._update_mode_ui)
+
+        self.auto_window_spin = QSpinBox()
+        self.auto_window_spin.setRange(1, 60)
+        self.auto_window_spin.setValue(1)
+        self.auto_window_spin.setSuffix(" s")
+        self.auto_window_spin.setToolTip(
+            "How long Auto mode listens on each combination before trying "
+            "the next. If a full pass finds nothing, the next pass "
+            "automatically adds 1 second to this for every combination."
+        )
+
         self.start_btn = QPushButton("Start Passive Sniffing")
         self.start_btn.setProperty("role", "primary")
         self.start_btn.setMinimumHeight(38)
@@ -211,18 +351,64 @@ class PassiveSniffingWidget(QWidget):
         settings.addWidget(QLabel("Serial port"), 0, 2)
         settings.addWidget(self.port_combo, 0, 3)
         settings.addWidget(self.refresh_btn, 0, 4)
-        settings.addWidget(QLabel("Baud rate"), 1, 0)
-        settings.addWidget(self.baud_combo, 1, 1)
-        settings.addWidget(QLabel("Parity"), 1, 2)
-        settings.addWidget(self.parity_combo, 1, 3)
-        settings.addWidget(QLabel("Stop bits"), 1, 4)
-        settings.addWidget(self.stopbits_combo, 1, 5)
-        settings.addWidget(self.start_btn, 2, 0, 1, 6)
+
+        # Config mode's and Auto mode's settings rows occupy the same grid
+        # slot via a stacked widget — see _update_mode_ui(), which switches
+        # pages — so switching modes swaps the whole row cleanly instead of
+        # leaving disabled leftovers from the other mode in view.
+        config_page = QWidget()
+        config_row = QHBoxLayout(config_page)
+        config_row.setContentsMargins(0, 0, 0, 0)
+        config_row.addWidget(QLabel("Baud rate"))
+        self.baud_combo.setMinimumWidth(100)
+        config_row.addWidget(self.baud_combo)
+        config_row.addWidget(QLabel("Parity"))
+        self.parity_combo.setMinimumWidth(100)
+        config_row.addWidget(self.parity_combo)
+        config_row.addWidget(QLabel("Stop bits"))
+        self.stopbits_combo.setMinimumWidth(100)
+        config_row.addWidget(self.stopbits_combo)
+        config_row.addStretch()
+
+        auto_page = QWidget()
+        auto_page_layout = QVBoxLayout(auto_page)
+        auto_page_layout.setContentsMargins(0, 0, 0, 0)
+        auto_page_layout.setSpacing(4)
+
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(QLabel("Baud rates to try"))
+        auto_row.addWidget(self.auto_baud_combo)
+        auto_row.addWidget(QLabel("Parity to try"))
+        auto_row.addWidget(self.auto_parity_combo)
+        auto_row.addWidget(QLabel("Stop bits to try"))
+        auto_row.addWidget(self.auto_stopbits_combo)
+        auto_row.addWidget(QLabel("Seconds per setting"))
+        auto_row.addWidget(self.auto_window_spin)
+        auto_row.addStretch()
+        auto_page_layout.addLayout(auto_row)
+
+        # Nothing is checked by default (deliberate — avoids accidentally
+        # sweeping every combination) but that also means Start silently
+        # does nothing useful until the user notices. This makes the
+        # requirement visible up front instead of only after a blocked
+        # Start click's status-bar message.
+        self.auto_selection_hint = QLabel()
+        self.auto_selection_hint.setWordWrap(True)
+        # "editing" (amber) rather than "warning" (red) — this is a heads-up
+        # reminder before Start is even clicked, not an error condition.
+        self.auto_selection_hint.setStyleSheet(STATUS_STYLES["editing"])
+        auto_page_layout.addWidget(self.auto_selection_hint)
+
+        self.mode_settings_stack = QStackedWidget()
+        self.mode_settings_stack.addWidget(config_page)
+        self.mode_settings_stack.addWidget(auto_page)
+        settings.addWidget(self.mode_settings_stack, 1, 0, 1, 8)
+        settings.addWidget(self.start_btn, 2, 0, 1, 8)
 
         self.mode_hint = QLabel()
         self.mode_hint.setWordWrap(True)
         self.mode_hint.setStyleSheet("color: #526174; padding-top: 2px;")
-        settings.addWidget(self.mode_hint, 3, 0, 1, 6)
+        settings.addWidget(self.mode_hint, 3, 0, 1, 8)
         layout.addWidget(settings_group)
 
         filters_group = QGroupBox("Packet Filters")
@@ -287,12 +473,22 @@ class PassiveSniffingWidget(QWidget):
         self.clear_btn = QPushButton("Clear Packets")
         self.clear_btn.clicked.connect(self.clear_messages)
         actions.addWidget(self.clear_btn)
-        self.copy_btn = QPushButton("Copy Selected")
-        self.copy_btn.clicked.connect(self.copy_selected)
-        actions.addWidget(self.copy_btn)
-        self.export_btn = QPushButton("Export CSV")
-        self.export_btn.clicked.connect(self.export_csv_dialog)
-        actions.addWidget(self.export_btn)
+        # Less-frequent actions tucked behind one menu button instead of
+        # sitting in the row at equal weight to Pause/Clear — same slots as
+        # before, just relocated.
+        self.more_btn = QToolButton()
+        self.more_btn.setText("More ▾")
+        self.more_btn.setPopupMode(QToolButton.InstantPopup)
+        more_menu = QMenu(self.more_btn)
+        more_menu.setToolTipsVisible(True)
+        self.copy_action = more_menu.addAction("Copy Selected")
+        self.copy_action.setToolTip("Copy the selected captured rows to the clipboard.")
+        self.copy_action.triggered.connect(self.copy_selected)
+        self.export_action = more_menu.addAction("Export CSV")
+        self.export_action.setToolTip("Export the captured packets to a CSV file.")
+        self.export_action.triggered.connect(self.export_csv_dialog)
+        self.more_btn.setMenu(more_menu)
+        actions.addWidget(self.more_btn)
         self.save_profile_btn = QPushButton("Save as Profile")
         self.save_profile_btn.setProperty("role", "primary")
         self.save_profile_btn.setToolTip(
@@ -302,9 +498,47 @@ class PassiveSniffingWidget(QWidget):
         )
         self.save_profile_btn.clicked.connect(self.save_as_profile)
         actions.addWidget(self.save_profile_btn)
+
+        # Small "what actually gets saved" affordance, separate from the
+        # button's own short tooltip — the details here (slave ID limit,
+        # responses-only, duplicate-address handling, live-table-only scope)
+        # are easy to get wrong assumptions about, so they get their own
+        # always-visible icon instead of being buried in one long tooltip.
+        self.save_profile_info_icon = QLabel("?")
+        self.save_profile_info_icon.setFixedSize(18, 18)
+        self.save_profile_info_icon.setAlignment(Qt.AlignCenter)
+        self.save_profile_info_icon.setStyleSheet(
+            "background: #e9edf2; color: #475569; border: 1px solid #9ca8b8;"
+            "border-radius: 9px; font-weight: 600; font-size: 9pt;"
+        )
+        self.save_profile_info_icon.setToolTip(
+            "<b>What gets saved:</b><br>"
+            "&bull; <b>Every range you captured is combined</b> — not just the first. Poll "
+            "0–9, then 50–59, then 200–205, and all three end up in one profile.<br>"
+            "&bull; <b>One slave ID only</b> — mixed slave IDs in the table block saving.<br>"
+            "&bull; <b>Responses only</b> — request values aren't used.<br>"
+            "&bull; <b>Repeated addresses:</b> the first value seen wins; later repeats "
+            "are ignored.<br>"
+            "&bull; <b>Live table only</b> — clearing packets or pausing the display drops "
+            "anything not currently shown."
+        )
+        actions.addWidget(self.save_profile_info_icon)
+
         actions.addStretch()
         actions.addWidget(QLabel("Tip: double-click a row for full inspection"))
         layout.addLayout(actions)
+
+        footer = QHBoxLayout()
+        self.status_label = QLabel("Ready. No serial port is open.")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet(STATUS_STYLES["info"])
+        footer.addWidget(self.status_label, stretch=1)
+        self.stats_label = QLabel("Frames 0 · Requests 0 · Responses 0 · Errors 0")
+        footer.addWidget(self.stats_label)
+        self.auto_scroll = QCheckBox("Auto-scroll")
+        self.auto_scroll.setChecked(True)
+        footer.addWidget(self.auto_scroll)
+        layout.addLayout(footer)
 
         self.message_table = QTableWidget(0, 9)
         self.message_table.setHorizontalHeaderLabels(
@@ -336,16 +570,6 @@ class PassiveSniffingWidget(QWidget):
         self.message_table.cellDoubleClicked.connect(self._inspect_row)
         layout.addWidget(self.message_table, stretch=1)
 
-        footer = QHBoxLayout()
-        self.status_label = QLabel("Ready. No serial port is open.")
-        self.status_label.setWordWrap(True)
-        footer.addWidget(self.status_label, stretch=1)
-        self.stats_label = QLabel("Frames 0 · Requests 0 · Responses 0 · Errors 0")
-        footer.addWidget(self.stats_label)
-        self.auto_scroll = QCheckBox("Auto-scroll")
-        self.auto_scroll.setChecked(True)
-        footer.addWidget(self.auto_scroll)
-        layout.addLayout(footer)
         self._update_mode_ui()
 
     def refresh_ports(self) -> None:
@@ -358,7 +582,7 @@ class PassiveSniffingWidget(QWidget):
                 self.capture_service.available_ports(), key=lambda item: item.device
             )
         except Exception as error:
-            self.status_label.setText(f"Could not list serial ports: {error}")
+            self._set_status_message(f"Could not list serial ports: {error}", "warning")
             return
         for port in ports:
             self.port_combo.addItem(
@@ -383,18 +607,43 @@ class PassiveSniffingWidget(QWidget):
         self.capture_mode_combo.setEnabled(not running)
         self.port_combo.setEnabled(not running)
         self.refresh_btn.setEnabled(not running)
+        self.mode_settings_stack.setCurrentIndex(1 if auto_mode else 0)
         for widget in (self.baud_combo, self.parity_combo, self.stopbits_combo):
-            widget.setEnabled(not running and not auto_mode)
+            widget.setEnabled(not running)
+        for widget in (
+            self.auto_baud_combo,
+            self.auto_parity_combo,
+            self.auto_stopbits_combo,
+            self.auto_window_spin,
+        ):
+            widget.setEnabled(not running)
         if auto_mode:
-            self.mode_hint.setText(
-                "Auto mode remains receive-only. It cycles common baud, parity, and "
-                "stop-bit settings until a CRC-valid Modbus RTU packet is observed."
+            combination_count = (
+                len(self.auto_baud_combo.checked_values())
+                * len(self.auto_parity_combo.checked_values())
+                * len(self.auto_stopbits_combo.checked_values())
             )
+            self.mode_hint.setText(
+                "Auto mode remains receive-only. It cycles the baud rate / parity / "
+                "stop-bit combinations checked above "
+                f"({combination_count} combination(s) selected) until a CRC-valid "
+                "Modbus RTU packet is observed. Each combination gets the configured "
+                "number of seconds to listen; if a full pass finds nothing, the next "
+                "pass listens 1 second longer on every combination."
+            )
+            self.auto_selection_hint.setVisible(combination_count == 0)
+            if combination_count == 0:
+                self.auto_selection_hint.setText(
+                    "Nothing is checked above yet — check at least one baud rate, "
+                    "parity, and stop-bit option before clicking Start Passive "
+                    "Sniffing."
+                )
         else:
             self.mode_hint.setText(
                 "Config mode listens with the exact baud rate, parity, and stop bits "
                 "configured above."
             )
+            self.auto_selection_hint.setVisible(False)
 
     def toggle_monitor(self) -> None:
         if self.capture_service.worker is not None:
@@ -407,11 +656,23 @@ class PassiveSniffingWidget(QWidget):
         try:
             port = self._selected_port()
             if self.capture_mode_combo.currentData() == "auto":
+                baudrates = self.auto_baud_combo.checked_values()
+                parities = self.auto_parity_combo.checked_values()
+                stop_bits_options = self.auto_stopbits_combo.checked_values()
+                if not baudrates or not parities or not stop_bits_options:
+                    self._set_status_message(
+                        "Check at least one baud rate, parity, and stop-bit "
+                        "setting for Auto mode to try.",
+                        "warning",
+                    )
+                    return
                 self.capture_service.start_automatic(
                     AutoDetectionSettings(
                         port=port,
-                        baudrates=self.BAUDRATES,
-                        minimum_window_seconds=(DEFAULT_AUTO_DETECTION_WINDOW_SECONDS),
+                        baudrates=tuple(baudrates),
+                        parities=tuple(parities),
+                        stop_bits_options=tuple(stop_bits_options),
+                        minimum_window_seconds=float(self.auto_window_spin.value()),
                     )
                 )
             else:
@@ -424,10 +685,10 @@ class PassiveSniffingWidget(QWidget):
                     )
                 )
         except (ConfigurationError, TypeError, ValueError) as error:
-            self.status_label.setText(f"Invalid passive capture setting: {error}")
+            self._set_status_message(f"Invalid passive capture setting: {error}", "warning")
             return
 
-        self.status_label.setText("Opening the serial port in receive-only mode...")
+        self._set_status_message("Opening the serial port in receive-only mode...")
 
     def stop_monitor(self) -> None:
         if self.capture_service.worker is None:
@@ -461,13 +722,13 @@ class PassiveSniffingWidget(QWidget):
             if tested_rates
             else ""
         )
-        self.status_label.setText(
+        self._set_status_message(
             f"Auto mode locked onto {baudrate} baud, parity {parity}, "
             f"{stopbits:g} stop bit(s). Listening only.{tested_text}"
         )
 
     def _on_error(self, message: str) -> None:
-        self.status_label.setText(message)
+        self._set_status_message(message, "warning")
 
     def _schedule_filter(self, *_args) -> None:
         self._filter_timer.start()
@@ -495,7 +756,7 @@ class PassiveSniffingWidget(QWidget):
             self._apply_filter()
             if self.auto_scroll.isChecked():
                 self.message_table.scrollToBottom()
-            self.status_label.setText(
+            self._set_status_message(
                 f"Displayed {len(queued)} packet(s) received while paused."
             )
 
@@ -504,7 +765,7 @@ class PassiveSniffingWidget(QWidget):
         self.frame_observed.emit(frame)
         if self._paused:
             self._pending_frames.append(frame)
-            self.status_label.setText(
+            self._set_status_message(
                 f"Display paused; {len(self._pending_frames)} packet(s) waiting."
             )
             return
@@ -635,9 +896,6 @@ class PassiveSniffingWidget(QWidget):
         self.function_filter.addItem("All functions", None)
         self._apply_filter()
         # Reset the footer counter to match the now-empty table. If a
-        # capture is still running, also zero the worker's own running
-        # totals — otherwise the next frame would make the counter jump
-        # right back up to the pre-clear numbers.
         self.stats_label.setText("Frames 0 · Requests 0 · Responses 0 · Errors 0")
         self.capture_service.reset_statistics()
         self.last_frame = None
@@ -645,7 +903,7 @@ class PassiveSniffingWidget(QWidget):
     def copy_selected(self) -> None:
         rows = sorted({index.row() for index in self.message_table.selectedIndexes()})
         if not rows:
-            self.status_label.setText("Select one or more captured rows to copy.")
+            self._set_status_message("Select one or more captured rows to copy.", "warning")
             return
         lines = []
         for row in rows:
@@ -656,7 +914,7 @@ class PassiveSniffingWidget(QWidget):
                 )
             )
         QGuiApplication.clipboard().setText("\n".join(lines))
-        self.status_label.setText(f"Copied {len(rows)} captured row(s).")
+        self._set_status_message(f"Copied {len(rows)} captured row(s).", "saved")
 
     def export_csv_dialog(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -682,10 +940,10 @@ class PassiveSniffingWidget(QWidget):
                         for column in range(self.message_table.columnCount())
                     )
         except OSError as error:
-            self.status_label.setText(f"Could not export capture: {error}")
+            self._set_status_message(f"Could not export capture: {error}", "warning")
             return
-        self.status_label.setText(
-            f"Exported {self.message_table.rowCount()} frames to {path}."
+        self._set_status_message(
+            f"Exported {self.message_table.rowCount()} frames to {path}.", "saved"
         )
 
     def shutdown(self, timeout_ms: int = 3_000) -> bool:

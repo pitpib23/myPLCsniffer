@@ -117,6 +117,25 @@ QPushButton[role="primary"] {
 QPushButton[role="primary"]:hover {
     background: #1d4ed8;
 }
+QToolButton {
+    min-height: 30px;
+    padding: 2px 12px;
+    color: #27364b;
+    background: #ffffff;
+    border: 1px solid #9ca8b8;
+    border-radius: 4px;
+}
+QToolButton:hover {
+    background: #edf4ff;
+    border-color: #4f82c4;
+}
+QToolButton:pressed {
+    background: #dceafe;
+}
+QToolButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
 QTableWidget {
     color: #1f2937;
     background: #ffffff;
