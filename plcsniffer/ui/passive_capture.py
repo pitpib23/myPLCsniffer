@@ -58,6 +58,8 @@ class CheckableComboBox(QComboBox):
     """
 
     selection_changed = Signal()
+    def wheelEvent(self, event):
+        event.ignore()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -439,6 +441,7 @@ class PassiveSniffingWidget(QWidget):
             "Response",
             "Exception response",
             "Unmatched frame",
+            "CRC Error",
         ):
             self.frame_type_filter.addItem(frame_type, frame_type)
         self.frame_type_filter.currentIndexChanged.connect(self._apply_filter)

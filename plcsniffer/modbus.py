@@ -484,14 +484,52 @@ class PassiveSerialReaderThread(QThread):
         for raw in frames:
             self._decode_and_publish(raw)
         if final and remainder:
-            self._counts["crc_errors"] += 1
-            self.statistics.emit(dict(self._counts))
-            self.error.emit(
-                f"Ignored {len(remainder)} byte(s) without a valid Modbus CRC. "
-                "Check baud rate, parity, stop bits, and A/B polarity."
-            )
+            self._publish_crc_error(remainder)
             return b""
         return remainder
+
+    def _publish_crc_error(self, raw: bytes) -> None:
+        """Surface bytes that never resolved into a valid CRC as a flagged row.
+
+        Kept as a real, timestamped table entry (frame_type "CRC Error")
+        instead of only a status-bar message, so a stray bad byte isn't
+        silently dropped — the row itself is the permanent record. Reported
+        through the `status` signal, not `error`: the capture is still
+        running fine at this point (more frames keep arriving after this),
+        so it shouldn't paint the status bar red — `error` stays reserved
+        for failures that actually stop capture (port disconnected, etc.).
+        """
+        self._counts["frames"] += 1
+        self._counts["crc_errors"] += 1
+        frame = CapturedModbusFrame(
+            timestamp=time.time(),
+            direction="Unknown",
+            slave_id=raw[0] if raw else 0,
+            function_code=raw[1] if len(raw) >= 2 else 0,
+            function_name="CRC error",
+            frame_type="CRC Error",
+            address=None,
+            quantity=None,
+            values=(),
+            raw=raw,
+            description=(
+                f"Ignored {len(raw)} byte(s) without a valid Modbus CRC. Check "
+                "baud rate, parity, stop bits, and A/B polarity."
+            ),
+        )
+        self.frame_received.emit(frame)
+        self.statistics.emit(dict(self._counts))
+        self.status.emit(
+            f"Ignored {len(raw)} byte(s) without a valid Modbus CRC — flagged "
+            "in the table below."
+        )
+        log_event(
+            logging.WARNING,
+            "passive_modbus_frame_rejected",
+            port=self.port,
+            byte_count=len(raw),
+            raw_hex=raw.hex(" ").upper(),
+        )
 
     def _capture_loop(self, serial_port, initial_buffer: bytes = b"") -> None:
         buffer = initial_buffer
