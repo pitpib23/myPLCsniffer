@@ -24,8 +24,8 @@ Select a COM port and one setup mode:
   receive-only and may require several passes on a quiet bus.
 
 The large packet table includes timestamps, inferred direction, unit ID,
-function, frame type, address, count, decoded values, and complete RTU bytes.
-Filters can be combined. Search updates are debounced to keep the interface
+function, frame type, address, count, and complete RTU bytes. Filters can
+be combined. Search updates are debounced to keep the interface
 responsive with large captures. Paused packets are queued and can be copied,
 cleared, or exported to CSV. The full tab scrolls on smaller displays.
 
@@ -36,11 +36,13 @@ can therefore appear as unmatched.
 ### 2. Packet Inspector
 
 Double-click a packet in Tab 1 to open it here. The important view includes
-timing, direction, unit ID, function, address, quantity, values, decoder status,
-CRC values, and the raw frame. **Show All Packet Information** adds exact
-timestamps, PDU/data bytes, exception details, matched-request timing, and a
-byte-by-byte table. This tab is also scrollable and its tables have increased
-minimum heights.
+timing, direction, unit ID, function, address, quantity, decoder status,
+CRC values, and the raw frame — not the decoded register values themselves.
+**Show All Packet Information** adds exact timestamps, PDU/data bytes,
+exception details, matched-request timing, and a byte-by-byte table (each
+byte's hex/decimal/binary value and its role, e.g. "Start address high
+byte" — still not a combined decoded reading). This tab is also scrollable
+and its tables have increased minimum heights.
 
 ### 3. Logging
 
@@ -53,16 +55,58 @@ directory.
 ### 4. Profile
 
 Named register profiles map raw Modbus addresses to meaningful PLC values.
-Each row records a name, function code, register address (with the computed
-40001-style mapped address shown read-only), multiplier, unit, description,
-and its own live **Timestamp**/**Status** (not sniffed yet, waiting for
-data, updated, or stopped). Long descriptions that don't fit the column are
-still available as a hover tooltip. Profiles open read-only; **Edit
-Profile** unlocks the form and register table for changes, and **Save
-Profile** or **Discard Changes** commits or reverts them. Profiles persist
-to `plcsniffer/profile.json`. A capture session on Tab 1 can also build a
-new profile directly from the packets it observed, landing here unlocked
-for review before saving.
+Each row records a name, function code, **Format**, **Byte Order**,
+register address, multiplier, unit, description, and its own live
+**Timestamp**/**Status** (not sniffed yet, waiting for data, updated, or
+stopped). Long descriptions that don't fit the column are still available
+as a hover tooltip. Profiles open read-only; **Edit Profile** unlocks the
+form and register table for changes, and **Save Profile** or **Discard
+Changes** commits or reverts them. Profiles persist to
+`plcsniffer/profile.json`. A capture session on Tab 1 can also build a new
+profile directly from the packets it observed, landing here unlocked for
+review before saving (every register it detects starts as plain 16-bit
+Unsigned; combine a span into a wider reading afterwards if needed, as
+below).
+
+**Format** controls how many consecutive registers a row reads and how the
+combined bytes are interpreted. The eight options match what the major
+Modbus/SCADA tools expose (Kepware KEPServerEX, Modbus Poll, Ignition's
+Advanced Modbus module) — deliberately not more: e.g. an 80-bit "long
+double" appears in generic C type references but in none of those tools'
+Modbus type lists, since it has no defined wire format and isn't IEEE-754:
+
+- **16-bit Unsigned** (default) / **16-bit Signed** each use only this row's
+  own address.
+- **32-bit Unsigned / Signed / Float** each combine this address with the
+  next one (2 registers).
+- **64-bit Unsigned / Signed / Float** each combine this address with the
+  next three (4 registers).
+- Every register in the span must arrive in the *same* response to be
+  decoded; a poll that only covers part of the span leaves the reading
+  unchanged rather than showing a half-updated value. Only meaningful for
+  register-based functions (Read Holding/Input Registers, Write
+  Single/Multiple Register); coil-type functions carry single-bit values
+  and are never combined.
+
+**Byte Order** (next to Format) picks which official-standard byte order to
+decode with — vendors disagree on this, so if a decoded value looks
+garbled, try another option. Which options are offered depends on Format's
+register span: 16-bit only has **Big-Endian**/**Little-Endian**; 32-bit adds
+**Word-Swapped**/**Byte-Swapped**; 64-bit adds **Double-Word Swapped** and
+its own **Byte-and-Word Swapped** (the same underlying swap as 32-bit's
+Byte-Swapped, just under the name vendors use at that width). Hover an
+option — in the open dropdown, or the cell itself when closed — to see its
+example letter mapping (e.g. Word-Swapped shows "C D A B"). Switching Format
+to a width where the current Byte Order no longer exists resets it to
+Big-Endian.
+
+The **Register** column shows the raw, zero-based starting address you
+type in (e.g. "48"), or a range (e.g. "48-49") once Format spans more than
+one register — only the starting number is ever edited, the range is
+display-only. Hover over it to see the equivalent Modicon reference (e.g.
+"Address: 40049-40050"). If a profile already has separate 16-bit rows for
+what's actually one wider value, reconfigure one row's Format/Byte Order
+and remove the now-redundant row(s) for the other address(es).
 
 The profile list on the left is a collapsible sidebar: **« Hide Profiles**
 gives the summary and register table the full tab width, and the same
@@ -142,7 +186,18 @@ python -m unittest discover -v
 
 The suite covers CRC decoding, response matching, receive-only Auto mode,
 single-handle cleanup, filters, paused queues, CSV export, scrollable tab layout,
-packet inspection, midnight log rotation, and live log-file refresh.
+packet inspection, midnight log rotation, live log-file refresh (including the
+log-path label eliding to the available width), the main window's small-screen
+minimum-size floor, its close-event shutdown/warning path, Tab 1's Save as
+Profile capture-to-profile flow, the Profile tab's own add/remove/edit/save/
+discard/sidebar-toggle workflow and register-address range validation, and
+its multi-register Format/Byte Order combining (every official-standard
+byte order at every width — including 64-bit's Double-Word Swapped — the
+Format-dependent set of options offered and their example letter-mapping
+tooltips, resetting Byte Order when a Format change makes it invalid,
+unsigned/signed/float/64-bit, partial-span and coil-function guards, the
+Register cell's range display, and backward compatibility with profiles
+saved before Format existed).
 
 ## Troubleshooting
 
