@@ -38,8 +38,16 @@ from plcsniffer.modbus import (
     FUNCTION_NAMES,
     MODICON_BLOCK_OFFSET,
 )
+from plcsniffer.ui.responsive import METRICS, ResponsiveMode, apply_layout_spacing
 from plcsniffer.ui.style import STATUS_STYLES
 from plcsniffer.validation import validate_register_address
+
+# sniff_port_combo's minimum width per density — see _build_sniff_toolbar.
+_SNIFF_PORT_MINIMUM_WIDTH_BY_MODE = {
+    ResponsiveMode.NORMAL: 350,
+    ResponsiveMode.COMPACT: 220,
+    ResponsiveMode.ULTRA_COMPACT: 180,
+}
 
 # Profile Configuration's parity_combo (see _build_config_form) stores the
 # full word ("None"/"Even"/"Odd") rather than the single-letter code
@@ -283,6 +291,16 @@ class ProfileTab(QWidget):
         # Splitter proportions to restore when the sidebar is reopened after
         # being hidden via _toggle_nav_panel(); see that method.
         self._nav_panel_sizes: list[int] | None = None
+        # Tracked explicitly rather than read back via left_panel.isVisible()
+        # — that reports False for a widget that has simply never been
+        # shown yet (e.g. during __init__, before the window is visible),
+        # which would misfire the very first _set_sidebar_visible() call.
+        self._sidebar_visible = True
+        # Once True (the user has manually clicked Hide/Show Profiles even
+        # once), apply_responsive_mode() never touches the sidebar again —
+        # a density-driven auto-collapse must never fight a choice the user
+        # already made explicitly.
+        self._sidebar_user_overridden = False
 
         # Independent receive-only capture for this tab's own Start/Stop
         # Passive Sniffing button. Reuses the exact same QThread worker,
@@ -312,20 +330,70 @@ class ProfileTab(QWidget):
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 3)
 
+    def apply_responsive_mode(self, mode: ResponsiveMode) -> None:
+        """Densify both splitter panels and auto-collapse the sidebar.
+
+        register_table already has stretch=1 in the right panel (see
+        _build_table), so — same as the other tabs — shrinking the chrome
+        above it (and, here, the sidebar's own share of the splitter) is
+        what actually grows its share of a short or narrow window.
+        """
+        metrics = METRICS[mode]
+        left_margin = metrics.layout_margin
+        self._left_layout.setContentsMargins(
+            left_margin, left_margin, left_margin, left_margin
+        )
+        apply_layout_spacing(self._left_layout, metrics.layout_spacing)
+
+        # Right panel's top/bottom margin was always a little tighter than
+        # its left/right (10, 8, 10, 8) — same ratio, scaled with density.
+        right_horizontal = metrics.layout_margin
+        right_vertical = max(metrics.layout_margin - 2, 0)
+        self._right_layout.setContentsMargins(
+            right_horizontal, right_vertical, right_horizontal, right_vertical
+        )
+        apply_layout_spacing(self._right_layout, metrics.layout_spacing)
+
+        self.sniff_port_combo.setMinimumWidth(
+            _SNIFF_PORT_MINIMUM_WIDTH_BY_MODE[mode]
+        )
+        self.register_table.verticalHeader().setDefaultSectionSize(
+            metrics.table_row_height
+        )
+
+        # Give the register table more width on a narrow/short window by
+        # collapsing the profile-list sidebar — but only ever as a
+        # reversible *default*. The moment the user has manually toggled it
+        # even once, _sidebar_user_overridden latches permanently and this
+        # branch never touches it again.
+        if not self._sidebar_user_overridden:
+            self._set_sidebar_visible(
+                mode is ResponsiveMode.NORMAL, user_initiated=False
+            )
+
     def _toggle_nav_panel(self) -> None:
-        """Hide or restore the profile-list sidebar.
+        """Hide or restore the profile-list sidebar (the button's click handler).
+
+        Marks the choice as user-initiated, so apply_responsive_mode() will
+        never override it again for the rest of this tab's life — see
+        _set_sidebar_visible().
+        """
+        self._set_sidebar_visible(not self._sidebar_visible, user_initiated=True)
+
+    def _set_sidebar_visible(self, visible: bool, *, user_initiated: bool) -> None:
+        """Shared implementation for both the manual toggle and density-driven auto-collapse.
 
         Hiding it makes the splitter give its space straight to the summary
         and register table. The toggle button lives in the right panel (see
         _build_edit_toolbar) so it stays reachable even while the sidebar is
         fully collapsed to zero width.
         """
-        if self.left_panel.isVisible():
-            self._nav_panel_sizes = self.splitter.sizes()
-            self.left_panel.setVisible(False)
-            self.toggle_nav_btn.setText("» Show Profiles")
-            self.toggle_nav_btn.setToolTip("Show the profile list")
-        else:
+        if visible == self._sidebar_visible:
+            return
+        self._sidebar_visible = visible
+        if user_initiated:
+            self._sidebar_user_overridden = True
+        if visible:
             self.left_panel.setVisible(True)
             if self._nav_panel_sizes:
                 self.splitter.setSizes(self._nav_panel_sizes)
@@ -333,6 +401,11 @@ class ProfileTab(QWidget):
             self.toggle_nav_btn.setToolTip(
                 "Hide the profile list to give the summary more room"
             )
+        else:
+            self._nav_panel_sizes = self.splitter.sizes()
+            self.left_panel.setVisible(False)
+            self.toggle_nav_btn.setText("» Show Profiles")
+            self.toggle_nav_btn.setToolTip("Show the profile list")
 
     def _build_left_panel(self) -> None:
         # Styled as a distinct nav sidebar (white card, right border, accented
@@ -352,6 +425,7 @@ class ProfileTab(QWidget):
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(12, 12, 12, 12)
         left_layout.setSpacing(8)
+        self._left_layout = left_layout
 
         title = QLabel("Profiles")
         title.setStyleSheet("font-size: 11pt; font-weight: 700; color: #1f2937;")
@@ -405,6 +479,7 @@ class ProfileTab(QWidget):
         right_layout = QVBoxLayout(self.right_panel)
         right_layout.setContentsMargins(10, 8, 10, 8)
         right_layout.setSpacing(6)
+        self._right_layout = right_layout
 
         self._build_edit_toolbar(right_layout)
         self._build_name_row(right_layout)

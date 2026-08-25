@@ -26,6 +26,23 @@ from plcsniffer.modbus import (
     crc_is_valid,
     modbus_crc,
 )
+from plcsniffer.ui.responsive import METRICS, ResponsiveMode, apply_layout_spacing
+
+# Compact/ultra-compact floors for byte_table, well below
+# INSPECTOR_BYTE_TABLE_MINIMUM_HEIGHT's normal-mode floor — this table is
+# now QSizePolicy.Expanding (see _build_ui), so these only matter as an
+# absolute lower bound; tests/test_architecture.py pins the NORMAL-mode
+# floor at >=300, which INSPECTOR_BYTE_TABLE_MINIMUM_HEIGHT alone satisfies.
+_BYTE_TABLE_MINIMUM_HEIGHT_BY_MODE = {
+    ResponsiveMode.NORMAL: INSPECTOR_BYTE_TABLE_MINIMUM_HEIGHT,
+    ResponsiveMode.COMPACT: 220,
+    ResponsiveMode.ULTRA_COMPACT: 150,
+}
+_SUMMARY_TABLE_MINIMUM_HEIGHT_BY_MODE = {
+    ResponsiveMode.NORMAL: INSPECTOR_SUMMARY_MINIMUM_HEIGHT,
+    ResponsiveMode.COMPACT: 220,
+    ResponsiveMode.ULTRA_COMPACT: 160,
+}
 
 
 class PacketInspectorWidget(QWidget):
@@ -37,13 +54,16 @@ class PacketInspectorWidget(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        # This widget is intended to live inside the tab's QScrollArea.
-        # The first two tables grow to show every row. The byte table shows
-        # up to 16 rows and scrolls internally when a frame is longer.
+        # This widget is intended to live inside the tab's QScrollArea, but
+        # only as a last-resort fallback now: byte_table below is
+        # Expanding+stretch, so it's the one that actually claims whatever
+        # space this tab is given, shrinking to its own floor (and falling
+        # back to its own internal scrollbar for extra rows) well before the
+        # outer QScrollArea would ever need to engage.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
-        layout.setAlignment(Qt.AlignTop)
+        self._root_layout = layout
 
         self.help_label = QLabel(
             "Double-click a packet on the Passive Sniffing tab to inspect it here. "
@@ -57,6 +77,9 @@ class PacketInspectorWidget(QWidget):
         layout.addWidget(self.help_label)
 
         # First group: summary table, then the toggle button at the bottom.
+        # Important information, so it stays exactly the height its content
+        # needs (see _fit_table_to_rows) rather than competing for space —
+        # byte_table is the one that gives ground on a short screen.
         self.summary_group = QGroupBox("Important Packet Information")
         summary_layout = QVBoxLayout(self.summary_group)
         summary_layout.setContentsMargins(12, 18, 12, 12)
@@ -77,7 +100,13 @@ class PacketInspectorWidget(QWidget):
         self.summary_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(self.summary_group)
 
-        # Expanded information appears directly below the button/first group.
+        # Expanded information appears directly below the button/first
+        # group. Secondary/detailed info (per the task's stated priority),
+        # so this group — specifically byte_table inside it — is the one
+        # that actually expands into whatever space remains: the group
+        # itself must be Expanding too, not just byte_table, since a Fixed-
+        # policy parent would clamp to its children's natural height
+        # regardless of any stretch factor given to it below.
         self.all_information_group = QGroupBox("Complete Byte-Level Information")
         all_layout = QVBoxLayout(self.all_information_group)
         all_layout.setContentsMargins(12, 18, 12, 12)
@@ -103,20 +132,44 @@ class PacketInspectorWidget(QWidget):
         self.byte_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.byte_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.byte_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
-        self.byte_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Expanding in both directions (was Expanding/Fixed with a
+        # setFixedHeight computed for up to 16 rows): this table now claims
+        # whatever vertical space the tab actually has, growing past 16
+        # rows on a tall window and shrinking — using its own internal
+        # scrollbar for whatever doesn't fit — on a short one, rather than
+        # always reserving room for exactly 16 regardless of the window.
+        self.byte_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.byte_table.setMinimumHeight(INSPECTOR_BYTE_TABLE_MINIMUM_HEIGHT)
 
         byte_header = self.byte_table.horizontalHeader()
         for column in range(4):
             byte_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         byte_header.setSectionResizeMode(4, QHeaderView.Stretch)
-        all_layout.addWidget(self.byte_table)
+        all_layout.addWidget(self.byte_table, stretch=1)
 
         self.all_information_group.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Fixed
+            QSizePolicy.Expanding, QSizePolicy.Expanding
         )
         self.all_information_group.setVisible(False)
-        layout.addWidget(self.all_information_group)
+        layout.addWidget(self.all_information_group, stretch=1)
+
+    def apply_responsive_mode(self, mode: ResponsiveMode) -> None:
+        """Densify margins/spacing and lower the idle-state table floors.
+
+        summary_table/full_details_table stay exactly fit to their content
+        (see _fit_table_to_rows) at every mode — that's already
+        right-sized, not oversized. byte_table's floor is what actually
+        shrinks, since it's the Expanding one that's meant to give ground.
+        """
+        metrics = METRICS[mode]
+        margin = metrics.layout_margin
+        self._root_layout.setContentsMargins(margin, margin, margin, margin)
+        # Reaches summary_layout and all_layout too — both are owned by a
+        # QGroupBox reachable from this root layout.
+        apply_layout_spacing(self._root_layout, metrics.layout_spacing)
+
+        self.summary_table.setMinimumHeight(_SUMMARY_TABLE_MINIMUM_HEIGHT_BY_MODE[mode])
+        self.byte_table.setMinimumHeight(_BYTE_TABLE_MINIMUM_HEIGHT_BY_MODE[mode])
 
     @staticmethod
     def _configure_property_table(table: QTableWidget) -> None:
@@ -145,25 +198,14 @@ class PacketInspectorWidget(QWidget):
 
         table.setFixedHeight(height)
 
-    @staticmethod
-    def _fit_table_to_visible_rows(
-        table: QTableWidget, maximum_visible_rows: int = 16
-    ) -> None:
-        """Show at most ``maximum_visible_rows`` and scroll additional rows."""
-        table.resizeRowsToContents()
-
-        visible_rows = min(table.rowCount(), maximum_visible_rows)
-        height = table.horizontalHeader().height()
-        height += sum(table.rowHeight(row) for row in range(visible_rows))
-        height += table.frameWidth() * 2 + 2
-
-        table.setFixedHeight(height)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
     def _fit_all_tables(self) -> None:
         self._fit_table_to_rows(self.summary_table)
         self._fit_table_to_rows(self.full_details_table)
-        self._fit_table_to_visible_rows(self.byte_table, maximum_visible_rows=16)
+        # byte_table is Expanding+stretch (see _build_ui), so it claims
+        # whatever space the layout actually gives it rather than being
+        # fixed to a row count — only its per-row heights need recomputing
+        # here, for wrapped "Meaning" cell text.
+        self.byte_table.resizeRowsToContents()
 
         # Recalculate group-box size hints after table heights change.
         self.summary_group.adjustSize()

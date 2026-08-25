@@ -70,11 +70,20 @@ INSPECTOR_SUMMARY_MINIMUM_HEIGHT = 400
 INSPECTOR_BYTE_TABLE_MINIMUM_HEIGHT = 340
 # Window floor, not a per-tab content floor: each tab's own content sizes
 # itself from its children (table/button/combo minimums below), so this only
-# has to be small enough to fit a Raspberry Pi-class display. 760x440 leaves
-# slack under the 800x480 baseline for window-manager chrome; the window is
-# free to grow well past this on a normal desktop.
+# has to be small enough to fit a Raspberry Pi-class display. 760px wide
+# leaves slack under the 800px baseline for window-manager chrome; the
+# window is free to grow well past this on a normal desktop.
 MAIN_WINDOW_MINIMUM_WIDTH = 760
-MAIN_WINDOW_MINIMUM_HEIGHT = 440
+# Low enough that the window can actually reach
+# responsive.ULTRA_COMPACT_SEVERE_HEIGHT_THRESHOLD (the on-screen-keyboard
+# escape hatch) by resizing alone — a floor at or above that threshold would
+# make that mode's severe-height branch unreachable in practice.
+MAIN_WINDOW_MINIMUM_HEIGHT = 320
+# How long a resize burst must go quiet before MainWindow recomputes its
+# responsive mode — short enough to feel immediate once a resize/keyboard
+# transition settles, long enough that a drag-resize (many resizeEvents in
+# quick succession) triggers one recompute instead of dozens.
+RESIZE_DEBOUNCE_MS = 120
 FILTER_DEBOUNCE_MS = 150
 MAX_PAUSED_PACKETS = 10_000
 SERIAL_SHUTDOWN_TIMEOUT_MS = 3_000

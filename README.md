@@ -27,7 +27,11 @@ The large packet table includes timestamps, inferred direction, unit ID,
 function, frame type, address, count, and complete RTU bytes. Filters can
 be combined. Search updates are debounced to keep the interface
 responsive with large captures. Paused packets are queued and can be copied,
-cleared, or exported to CSV. The full tab scrolls on smaller displays.
+cleared, or exported to CSV. On a small display the Setup row and the
+Pause/Clear/Save-as-Profile row reflow onto two lines each and the
+"double-click to inspect" hint is dropped — see
+[Responsive layout](#responsive-layout--small-screens) below; scrolling only
+kicks in if a window genuinely can't fit even that.
 
 Direction is inferred from request/response order because ordinary two-wire
 RS-485 has no separate direction channel. A response observed before its request
@@ -41,8 +45,11 @@ CRC values, and the raw frame — not the decoded register values themselves.
 **Show All Packet Information** adds exact timestamps, PDU/data bytes,
 exception details, matched-request timing, and a byte-by-byte table (each
 byte's hex/decimal/binary value and its role, e.g. "Start address high
-byte" — still not a combined decoded reading). This tab is also scrollable
-and its tables have increased minimum heights.
+byte" — still not a combined decoded reading). The byte table expands or
+shrinks to fill whatever space is actually available (with its own internal
+scrollbar for whatever doesn't fit) rather than always reserving room for a
+fixed row count; the important-information summary above it always keeps
+its own natural size.
 
 ### 3. Logging
 
@@ -110,7 +117,11 @@ and remove the now-redundant row(s) for the other address(es).
 
 The profile list on the left is a collapsible sidebar: **« Hide Profiles**
 gives the summary and register table the full tab width, and the same
-button (now **» Show Profiles**) brings it back at its previous width.
+button (now **» Show Profiles**) brings it back at its previous width. On a
+small/short window the sidebar auto-collapses to give the register table
+more room; the moment you use the button yourself, that manual choice is
+respected from then on and the sidebar stops auto-collapsing or
+auto-restoring — see [Responsive layout](#responsive-layout--small-screens).
 
 **Passive sniffing on this tab is independent of Tab 1.** Pick a serial
 port in this tab's own toolbar and click **Start Passive Sniffing** to open
@@ -123,6 +134,40 @@ frame seen on the bus. Editing, adding, removing, or switching profiles is
 locked while sniffing is active and restored when it stops, since changing
 the active profile mid-capture would leave the worker matching frames
 against settings it was never opened with.
+
+## Responsive layout / small screens
+
+The window adapts to whatever size it actually is at runtime — including an
+on-screen keyboard shrinking the usable height on a Raspberry Pi — rather
+than being tuned for one resolution. `plcsniffer/ui/responsive.py` computes
+one of three density tiers purely from the current window's width/height
+(never a resolution or platform check): **Normal**, **Compact**, and
+**Ultra-compact**. `MainWindow` recomputes the tier on every resize
+(debounced ~120ms so a drag-resize doesn't trigger dozens of recomputes) and
+applies it two ways:
+
+- Regenerating and reapplying the app's one QSS theme with tier-specific
+  margins/padding/control heights/font size — this reaches every widget in
+  one `setStyleSheet()` call.
+- Calling each tab's own `apply_responsive_mode()` for what a stylesheet
+  can't do: per-layout spacing (via the small recursive
+  `apply_layout_spacing()` helper, which reaches every nested row/grid —
+  including ones owned by a `QGroupBox`'s own layout — from one call on a
+  tab's root layout) and structural reflow. On Tab 1, the Setup row and the
+  Pause/Clear/Save-as-Profile row each split from one row into two below the
+  Compact threshold (and back to one row above it); a purely informational
+  hint label is dropped in Compact/Ultra-compact rather than reflowed. On
+  Tab 4, the profile sidebar auto-collapses/restores the same way, unless
+  you've ever toggled it yourself — see the Profile section above.
+
+Data tables (the capture table, the register table, the packet inspector's
+byte table) use `QSizePolicy.Expanding` with a stretch factor rather than a
+fixed or capped height, so they claim whatever space the chrome above them
+doesn't need; their minimum-height floors are themselves smaller in
+Compact/Ultra-compact, rather than one fixed floor regardless of window
+size. `QScrollArea` remains around each tab as a last-resort fallback for a
+window that genuinely can't fit even the densified layout — not as the
+primary way small screens are handled.
 
 ## Architecture
 
@@ -185,19 +230,23 @@ python -m unittest discover -v
 ```
 
 The suite covers CRC decoding, response matching, receive-only Auto mode,
-single-handle cleanup, filters, paused queues, CSV export, scrollable tab layout,
-packet inspection, midnight log rotation, live log-file refresh (including the
-log-path label eliding to the available width), the main window's small-screen
-minimum-size floor, its close-event shutdown/warning path, Tab 1's Save as
-Profile capture-to-profile flow, the Profile tab's own add/remove/edit/save/
-discard/sidebar-toggle workflow and register-address range validation, and
-its multi-register Format/Byte Order combining (every official-standard
-byte order at every width — including 64-bit's Double-Word Swapped — the
+single-handle cleanup, filters, paused queues, CSV export, packet inspection,
+midnight log rotation, live log-file refresh (including the log-path label
+eliding to the available width), the main window's small-screen minimum-size
+floor, its close-event shutdown/warning path, Tab 1's Save as Profile
+capture-to-profile flow, the Profile tab's own add/remove/edit/save/
+discard/sidebar-toggle workflow and register-address range validation, its
+multi-register Format/Byte Order combining (every official-standard byte
+order at every width — including 64-bit's Double-Word Swapped — the
 Format-dependent set of options offered and their example letter-mapping
 tooltips, resetting Byte Order when a Format change makes it invalid,
 unsigned/signed/float/64-bit, partial-span and coil-function guards, the
 Register cell's range display, and backward compatibility with profiles
-saved before Format existed).
+saved before Format existed), and the responsive density mechanism
+(`tests/test_responsive.py` — mode-threshold computation, the recursive
+layout-spacing helper, resizing a real MainWindow large → small → large with
+mode transitions/reflow/sidebar-collapse all verified reversible, and that
+critical controls on every tab stay reachable at every size).
 
 ## Troubleshooting
 

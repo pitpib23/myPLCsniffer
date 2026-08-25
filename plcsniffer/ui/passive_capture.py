@@ -41,7 +41,19 @@ from plcsniffer.config import (
 from plcsniffer.exceptions import ConfigurationError
 from plcsniffer.modbus import CapturedModbusFrame, REGISTER_TYPE_NOUNS
 from plcsniffer.capture import PassiveCaptureService
+from plcsniffer.ui.responsive import METRICS, ResponsiveMode, apply_layout_spacing
 from plcsniffer.ui.style import STATUS_STYLES
+
+# message_table's floor per density — NORMAL keeps CAPTURE_TABLE_MINIMUM_
+# HEIGHT itself (tests/test_architecture.py pins a >=500 floor there);
+# Compact/Ultra-compact trade fewer guaranteed-visible rows for actually
+# fitting a short viewport without the whole tab needing to scroll just to
+# reach the table.
+_CAPTURE_TABLE_MINIMUM_HEIGHT_BY_MODE = {
+    ResponsiveMode.NORMAL: CAPTURE_TABLE_MINIMUM_HEIGHT,
+    ResponsiveMode.COMPACT: 320,
+    ResponsiveMode.ULTRA_COMPACT: 220,
+}
 
 
 class CheckableComboBox(QComboBox):
@@ -267,6 +279,7 @@ class PassiveSniffingWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
+        self._root_layout = layout
 
         notice = QLabel(
             "Receive-only passive sniffing: this application never transmits Modbus "
@@ -282,6 +295,7 @@ class PassiveSniffingWidget(QWidget):
         settings = QGridLayout(settings_group)
         settings.setColumnStretch(1, 1)
         settings.setColumnStretch(3, 1)
+        self._settings_grid = settings
 
         self.capture_mode_combo = QComboBox()
         self.capture_mode_combo.addItem("Config mode — fixed serial settings", "config")
@@ -362,11 +376,12 @@ class PassiveSniffingWidget(QWidget):
         self.start_btn.setMinimumHeight(38)
         self.start_btn.clicked.connect(self.toggle_monitor)
 
-        settings.addWidget(QLabel("Setup mode"), 0, 0)
-        settings.addWidget(self.capture_mode_combo, 0, 1)
-        settings.addWidget(QLabel("Serial port"), 0, 2)
-        settings.addWidget(self.port_combo, 0, 3)
-        settings.addWidget(self.refresh_btn, 0, 4)
+        # Kept as attributes (not local QLabels) purely so
+        # _reflow_setup_row() can move them between grid cells later —
+        # nothing about their own behavior needs it.
+        self._setup_mode_label = QLabel("Setup mode")
+        self._serial_port_label = QLabel("Serial port")
+        self._reflow_setup_row(compact=False)
 
         # Config mode's and Auto mode's settings rows occupy the same grid
         # slot via a stacked widget — see _update_mode_ui(), which switches
@@ -424,13 +439,19 @@ class PassiveSniffingWidget(QWidget):
         self.mode_settings_stack = QStackedWidget()
         self.mode_settings_stack.addWidget(config_page)
         self.mode_settings_stack.addWidget(auto_page)
-        settings.addWidget(self.mode_settings_stack, 1, 0, 1, 8)
-        settings.addWidget(self.start_btn, 2, 0, 1, 8)
+        # Row numbers 10+ (not 1/2/3): _reflow_setup_row() below moves the
+        # setup row between one row (0) and two (0-1) depending on density,
+        # and an empty gap of unused row numbers costs a QGridLayout
+        # nothing — only rows that actually contain an item take space — so
+        # parking these well above any row the setup row could ever use
+        # means the two never have to coordinate row numbers.
+        settings.addWidget(self.mode_settings_stack, 10, 0, 1, 8)
+        settings.addWidget(self.start_btn, 11, 0, 1, 8)
 
         self.mode_hint = QLabel()
         self.mode_hint.setWordWrap(True)
         self.mode_hint.setStyleSheet("color: #526174; padding-top: 2px;")
-        settings.addWidget(self.mode_hint, 3, 0, 1, 8)
+        settings.addWidget(self.mode_hint, 12, 0, 1, 8)
         layout.addWidget(settings_group)
 
         filters_group = QGroupBox("Packet Filters")
@@ -506,14 +527,20 @@ class PassiveSniffingWidget(QWidget):
         filters.addWidget(self.filter_count_label, 2, 2)
         layout.addWidget(filters_group)
 
-        actions = QHBoxLayout()
+        # A QGridLayout (not QHBoxLayout) even in its one-row Normal form —
+        # _reflow_actions_row() below repositions these same widgets into
+        # two rows in Compact/Ultra-compact, the same technique
+        # _reflow_setup_row() already uses. This row's buttons are
+        # text-driven widths that barely respond to margin/spacing/padding
+        # reduction alone, so — unlike the other rows — reflow is what
+        # actually keeps this one from setting the tab's minimum width.
+        actions = QGridLayout()
+        self._actions_grid = actions
         self.pause_btn = QPushButton("Pause Display")
         self.pause_btn.setCheckable(True)
         self.pause_btn.toggled.connect(self._set_paused)
-        actions.addWidget(self.pause_btn)
         self.clear_btn = QPushButton("Clear Packets")
         self.clear_btn.clicked.connect(self.clear_messages)
-        actions.addWidget(self.clear_btn)
         # Less-frequent actions tucked behind one menu button instead of
         # sitting in the row at equal weight to Pause/Clear — same slots as
         # before, just relocated.
@@ -529,7 +556,6 @@ class PassiveSniffingWidget(QWidget):
         self.export_action.setToolTip("Export the captured packets to a CSV file.")
         self.export_action.triggered.connect(self.export_csv_dialog)
         self.more_btn.setMenu(more_menu)
-        actions.addWidget(self.more_btn)
         self.save_profile_btn = QPushButton("Save as Profile")
         self.save_profile_btn.setProperty("role", "primary")
         self.save_profile_btn.setToolTip(
@@ -538,7 +564,6 @@ class PassiveSniffingWidget(QWidget):
             "from a single slave ID."
         )
         self.save_profile_btn.clicked.connect(self.save_as_profile)
-        actions.addWidget(self.save_profile_btn)
 
         # Small "what actually gets saved" affordance, separate from the
         # button's own short tooltip — the details here (slave ID limit,
@@ -563,10 +588,15 @@ class PassiveSniffingWidget(QWidget):
             "&bull; <b>Live table only</b> — clearing packets or pausing the display drops "
             "anything not currently shown."
         )
-        actions.addWidget(self.save_profile_info_icon)
 
-        actions.addStretch()
-        actions.addWidget(QLabel("Tip: double-click a row for full inspection"))
+        # Purely a hint, not a control — the first thing dropped in
+        # Compact/Ultra-compact (see _reflow_actions_row), matching the
+        # task's priority of collapsing secondary/non-critical information
+        # before anything that's actually interactive.
+        self._double_click_tip_label = QLabel(
+            "Tip: double-click a row for full inspection"
+        )
+        self._reflow_actions_row(compact=False)
         layout.addLayout(actions)
 
         footer = QHBoxLayout()
@@ -611,6 +641,89 @@ class PassiveSniffingWidget(QWidget):
         layout.addWidget(self.message_table, stretch=1)
 
         self._update_mode_ui()
+
+    def _reflow_setup_row(self, *, compact: bool) -> None:
+        """Arrange the Setup mode / Serial port / Refresh row for the density.
+
+        Normal: one row, [Setup mode][combo][Serial port][combo][Refresh] —
+        the layout this tab has always used. Compact: two rows,
+        [Setup mode][combo] / [Serial port][combo][Refresh], matching the
+        task's own reflow example. Re-adding an already-placed widget to a
+        QGridLayout moves it (Qt drops the old cell, no leaked/duplicate
+        item — verified directly), so this is safe to call on every density
+        change without accumulating stale cells.
+        """
+        grid = self._settings_grid
+        if compact:
+            grid.addWidget(self._setup_mode_label, 0, 0)
+            grid.addWidget(self.capture_mode_combo, 0, 1, 1, 3)
+            grid.addWidget(self._serial_port_label, 1, 0)
+            grid.addWidget(self.port_combo, 1, 1, 1, 3)
+            grid.addWidget(self.refresh_btn, 1, 4)
+        else:
+            grid.addWidget(self._setup_mode_label, 0, 0)
+            grid.addWidget(self.capture_mode_combo, 0, 1)
+            grid.addWidget(self._serial_port_label, 0, 2)
+            grid.addWidget(self.port_combo, 0, 3)
+            grid.addWidget(self.refresh_btn, 0, 4)
+
+    def _reflow_actions_row(self, *, compact: bool) -> None:
+        """Arrange the Pause/Clear/More/Save-as-Profile row for the density.
+
+        Normal: one row, all five controls plus the trailing hint label —
+        the layout this tab has always used. Compact/Ultra-compact: two
+        rows (Pause/Clear/More, then Save as Profile/info icon) and the
+        hint label is dropped entirely rather than reflowed — it's the
+        least essential thing in this row (a nice-to-know, not a control),
+        so it's the first thing to go per the task's priority of collapsing
+        secondary information before anything interactive.
+        """
+        grid = self._actions_grid
+        self._double_click_tip_label.setVisible(not compact)
+        if compact:
+            grid.addWidget(self.pause_btn, 0, 0)
+            grid.addWidget(self.clear_btn, 0, 1)
+            grid.addWidget(self.more_btn, 0, 2)
+            grid.addWidget(self.save_profile_btn, 1, 0)
+            grid.addWidget(self.save_profile_info_icon, 1, 1)
+            grid.setColumnStretch(2, 0)
+            grid.setColumnStretch(6, 1)
+        else:
+            grid.addWidget(self.pause_btn, 0, 0)
+            grid.addWidget(self.clear_btn, 0, 1)
+            grid.addWidget(self.more_btn, 0, 2)
+            grid.addWidget(self.save_profile_btn, 0, 3)
+            grid.addWidget(self.save_profile_info_icon, 0, 4)
+            grid.addWidget(self._double_click_tip_label, 0, 6)
+            grid.setColumnStretch(2, 0)
+            grid.setColumnStretch(5, 1)
+
+    def apply_responsive_mode(self, mode: ResponsiveMode) -> None:
+        """Densify this tab's own layouts and reflow the Setup/Actions rows.
+
+        message_table already has stretch=1 in the root layout (see
+        _build_ui) and no fixed/oversized height beyond
+        CAPTURE_TABLE_MINIMUM_HEIGHT, so it already claims whatever space
+        these chrome rows don't need — shrinking their margins/spacing here
+        is what actually grows the table's share on a short window.
+        """
+        metrics = METRICS[mode]
+        margin = metrics.layout_margin
+        self._root_layout.setContentsMargins(margin, margin, margin, margin)
+        # One recursive call densifies every nested row/grid in this tab —
+        # the settings/filters group boxes, the Config/Auto stacked pages,
+        # the actions/footer rows — without wiring each one up individually.
+        apply_layout_spacing(self._root_layout, metrics.layout_spacing)
+        self.message_table.verticalHeader().setDefaultSectionSize(
+            metrics.table_row_height
+        )
+        self.message_table.setMinimumHeight(
+            _CAPTURE_TABLE_MINIMUM_HEIGHT_BY_MODE[mode]
+        )
+
+        compact = mode is not ResponsiveMode.NORMAL
+        self._reflow_setup_row(compact=compact)
+        self._reflow_actions_row(compact=compact)
 
     def refresh_ports(self) -> None:
         previous = (

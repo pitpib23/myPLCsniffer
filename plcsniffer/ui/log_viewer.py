@@ -20,6 +20,7 @@ from plcsniffer.config import (
     LOG_VIEW_INITIAL_TAIL_BYTES,
 )
 from plcsniffer.logging_config import LOG_FILE_PATH
+from plcsniffer.ui.responsive import METRICS, ResponsiveMode
 
 
 class LogViewerWidget(QWidget):
@@ -54,8 +55,10 @@ class LogViewerWidget(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
+        self._root_layout = layout
 
         details = QHBoxLayout()
+        self._details_layout = details
         details.addWidget(QLabel("Current log file:"))
         self.path_label = QLabel(str(self.log_path))
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -85,6 +88,25 @@ class LogViewerWidget(QWidget):
         # so its width() is still Qt's pre-layout default rather than the
         # real available space.
         QTimer.singleShot(0, self._update_path_label_text)
+
+    def apply_responsive_mode(self, mode: ResponsiveMode) -> None:
+        """Densify the header row so the log view keeps most of the space.
+
+        This tab was already the least problematic one (log_view already
+        has stretch=1, so it already claims all remaining space) — the only
+        real lever left is shrinking the header row's own margins/spacing
+        and the log text's font a little, both reversible.
+        """
+        metrics = METRICS[mode]
+        self._root_layout.setContentsMargins(*([metrics.layout_margin] * 4))
+        self._details_layout.setSpacing(metrics.layout_spacing)
+        self.log_view.setStyleSheet(
+            'font-family: "Cascadia Mono", "Consolas", monospace; '
+            f"font-size: {metrics.base_font_pt + 0.5}pt;"
+        )
+        # Re-elide immediately: the header row's available width just
+        # changed along with its margins.
+        self._update_path_label_text()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

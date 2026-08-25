@@ -28,6 +28,7 @@ plcsniffer/
   app.py                  builds the QApplication + main window
   ui/
     main_window.py        the 4-tab shell + the app's whole visual theme (one QSS string)
+    responsive.py         runtime window-size density: modes, thresholds, layout-spacing helper
     passive_capture.py    Tab 1 — capture setup, packet table, filters
     packet_inspector.py   Tab 2 — read-only packet detail view
     log_viewer.py         Tab 3 — tails the log file
