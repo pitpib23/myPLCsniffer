@@ -1,0 +1,830 @@
+[
+  {
+    "baudrate": 115200,
+    "id": "3be8e1e384c14792a546cae75cb4d5a5",
+    "name": "testtest",
+    "parity": "None",
+    "stop_bits": 1.0,
+    "slaves": [
+      {
+        "slave_id": 80,
+        "registers": [
+          {
+            "address": 48,
+            "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut in aliquam erat. Aenean vestibulum enim est, sed viverra ligula ultricies non. In nisi sem, efficitur et laoreet in, sagittis ac tellus. Aliquam et interdum leo, eu rhoncus diam. Nunc vel sem ullamcorper, malesuada sapien ac, consequat odio. Nullam dui libero, posuere ac est at, vehicula ultricies tellus. Sed quam tortor, hendrerit ut convallis in, suscipit vel dolor. Nunc a odio ut justo tempor hendrerit. Nulla quis neque hendrerit, porta justo ac, mattis turpis. Praesent dictum cursus augue at pretium. Vestibulum vitae blandit velit. Ut feugiat magna vitae dolor imperdiet, ut euismod justo facilisis. Nullam lorem ex, porttitor quis nunc nec, cursus semper augue. Pellentesque vitae elit eget enim convallis dictum.",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 48",
+            "parsed_value": "271",
+            "raw_hex": "0x010F",
+            "unit": ""
+          },
+          {
+            "address": 49,
+            "description": "hi",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 49",
+            "parsed_value": "1025",
+            "raw_hex": "0x0401",
+            "unit": ""
+          },
+          {
+            "address": 50,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 50",
+            "parsed_value": "1829",
+            "raw_hex": "0x0725",
+            "unit": ""
+          },
+          {
+            "address": 51,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 51",
+            "parsed_value": "269",
+            "raw_hex": "0x010D",
+            "unit": ""
+          },
+          {
+            "address": 52,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 52",
+            "parsed_value": "2031",
+            "raw_hex": "0x07EF",
+            "unit": ""
+          },
+          {
+            "address": 53,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 53",
+            "parsed_value": "65521",
+            "raw_hex": "0xFFF1",
+            "unit": ""
+          },
+          {
+            "address": 54,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 54",
+            "parsed_value": "106",
+            "raw_hex": "0x006A",
+            "unit": ""
+          },
+          {
+            "address": 55,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 55",
+            "parsed_value": "10",
+            "raw_hex": "0x000A",
+            "unit": ""
+          },
+          {
+            "address": 56,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 56",
+            "parsed_value": "17",
+            "raw_hex": "0x0011",
+            "unit": ""
+          },
+          {
+            "address": 57,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 57",
+            "parsed_value": "4",
+            "raw_hex": "0x0004",
+            "unit": ""
+          },
+          {
+            "address": 58,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 58",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 59,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 59",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 60,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 60",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 61,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 61",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 62,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 62",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 63,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 63",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          }
+        ],
+        "start_address": 48,
+        "count": 16
+      },
+      {
+        "slave_id": 1,
+        "start_address": 0,
+        "count": 0,
+        "registers": []
+      },
+      {
+        "slave_id": 2,
+        "start_address": 0,
+        "count": 0,
+        "registers": []
+      }
+    ]
+  },
+  {
+    "id": "0bff63b50a534e97bb0c1826f662e07c",
+    "name": "New profile",
+    "baudrate": 115200,
+    "parity": "None",
+    "stop_bits": 1.0,
+    "slaves": [
+      {
+        "slave_id": 80,
+        "registers": [
+          {
+            "name": "test",
+            "description": "",
+            "address": 56,
+            "multiplier": 1.0,
+            "raw_hex": "0x0011",
+            "parsed_value": "17",
+            "unit": "",
+            "function_code": 3
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "baudrate": 115200,
+    "id": "7c729944f03a460e814bee7d3d0aaab7",
+    "name": "WTVB01-485 Sensor",
+    "parity": "None",
+    "stop_bits": 1.0,
+    "slaves": [
+      {
+        "slave_id": 80,
+        "registers": [
+          {
+            "address": 48,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 48",
+            "parsed_value": "271",
+            "raw_hex": "0x010F",
+            "unit": ""
+          },
+          {
+            "address": 49,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 49",
+            "parsed_value": "1",
+            "raw_hex": "0x0001",
+            "unit": ""
+          },
+          {
+            "address": 50,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 50",
+            "parsed_value": "11278",
+            "raw_hex": "0x2C0E",
+            "unit": ""
+          },
+          {
+            "address": 51,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 51",
+            "parsed_value": "565",
+            "raw_hex": "0x0235",
+            "unit": ""
+          },
+          {
+            "address": 52,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 52",
+            "parsed_value": "2034",
+            "raw_hex": "0x07F2",
+            "unit": ""
+          },
+          {
+            "address": 53,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 53",
+            "parsed_value": "65527",
+            "raw_hex": "0xFFF7",
+            "unit": ""
+          },
+          {
+            "address": 54,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 54",
+            "parsed_value": "106",
+            "raw_hex": "0x006A",
+            "unit": ""
+          },
+          {
+            "address": 55,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 55",
+            "parsed_value": "10",
+            "raw_hex": "0x000A",
+            "unit": ""
+          },
+          {
+            "address": 56,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 56",
+            "parsed_value": "18",
+            "raw_hex": "0x0012",
+            "unit": ""
+          },
+          {
+            "address": 57,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 57",
+            "parsed_value": "5",
+            "raw_hex": "0x0005",
+            "unit": ""
+          },
+          {
+            "address": 58,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 58",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 59,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 59",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 60,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 60",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 61,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 61",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 62,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 62",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 63,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 63",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "baudrate": 9600,
+    "id": "32bd6e556caf42f59837206ff15d9601",
+    "name": "FG6485A Sensor",
+    "parity": "None",
+    "stop_bits": 1.0,
+    "slaves": [
+      {
+        "slave_id": 1,
+        "registers": [
+          {
+            "address": 0,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 0.1,
+            "name": "Humidity",
+            "parsed_value": "53.7",
+            "raw_hex": "0x0219",
+            "unit": "RH"
+          },
+          {
+            "address": 1,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 0.1,
+            "name": "Temperature",
+            "parsed_value": "27.3",
+            "raw_hex": "0x0111",
+            "unit": "C"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "baudrate": 115200,
+    "id": "04a4909aa80e40239693cbbe5b831709",
+    "name": "test request many address ranges",
+    "parity": "None",
+    "stop_bits": 1.0,
+    "slaves": [
+      {
+        "slave_id": 80,
+        "registers": [
+          {
+            "address": 0,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 0",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 4,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 4",
+            "parsed_value": "6",
+            "raw_hex": "0x0006",
+            "unit": ""
+          },
+          {
+            "address": 26,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 26",
+            "parsed_value": "80",
+            "raw_hex": "0x0050",
+            "unit": ""
+          },
+          {
+            "address": 48,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 48",
+            "parsed_value": "271",
+            "raw_hex": "0x010F",
+            "unit": ""
+          },
+          {
+            "address": 49,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 49",
+            "parsed_value": "513",
+            "raw_hex": "0x0201",
+            "unit": ""
+          },
+          {
+            "address": 50,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 50",
+            "parsed_value": "8723",
+            "raw_hex": "0x2213",
+            "unit": ""
+          },
+          {
+            "address": 51,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 51",
+            "parsed_value": "844",
+            "raw_hex": "0x034C",
+            "unit": ""
+          },
+          {
+            "address": 52,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 52",
+            "parsed_value": "2030",
+            "raw_hex": "0x07EE",
+            "unit": ""
+          },
+          {
+            "address": 53,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 53",
+            "parsed_value": "65524",
+            "raw_hex": "0xFFF4",
+            "unit": ""
+          },
+          {
+            "address": 54,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 54",
+            "parsed_value": "109",
+            "raw_hex": "0x006D",
+            "unit": ""
+          },
+          {
+            "address": 55,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 55",
+            "parsed_value": "13",
+            "raw_hex": "0x000D",
+            "unit": ""
+          },
+          {
+            "address": 56,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 56",
+            "parsed_value": "14",
+            "raw_hex": "0x000E",
+            "unit": ""
+          },
+          {
+            "address": 57,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 57",
+            "parsed_value": "5",
+            "raw_hex": "0x0005",
+            "unit": ""
+          },
+          {
+            "address": 58,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 58",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 59,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 59",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 60,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 60",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 61,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 61",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 62,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 62",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 63,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 63",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "baudrate": 115200,
+    "id": "f94aacffa7df44849ba9d74cf3c43768",
+    "name": "Slave 80 \u2014 19 register(s)",
+    "parity": "None",
+    "stop_bits": 1.0,
+    "slaves": [
+      {
+        "slave_id": 80,
+        "registers": [
+          {
+            "address": 0,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 0",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 4,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 4",
+            "parsed_value": "6",
+            "raw_hex": "0x0006",
+            "unit": ""
+          },
+          {
+            "address": 26,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 26",
+            "parsed_value": "80",
+            "raw_hex": "0x0050",
+            "unit": ""
+          },
+          {
+            "address": 48,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 48",
+            "parsed_value": "271",
+            "raw_hex": "0x010F",
+            "unit": ""
+          },
+          {
+            "address": 49,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 49",
+            "parsed_value": "1025",
+            "raw_hex": "0x0401",
+            "unit": ""
+          },
+          {
+            "address": 50,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 50",
+            "parsed_value": "4614",
+            "raw_hex": "0x1206",
+            "unit": ""
+          },
+          {
+            "address": 51,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 51",
+            "parsed_value": "965",
+            "raw_hex": "0x03C5",
+            "unit": ""
+          },
+          {
+            "address": 52,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 52",
+            "parsed_value": "2034",
+            "raw_hex": "0x07F2",
+            "unit": ""
+          },
+          {
+            "address": 53,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 53",
+            "parsed_value": "65524",
+            "raw_hex": "0xFFF4",
+            "unit": ""
+          },
+          {
+            "address": 54,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 54",
+            "parsed_value": "107",
+            "raw_hex": "0x006B",
+            "unit": ""
+          },
+          {
+            "address": 55,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 55",
+            "parsed_value": "11",
+            "raw_hex": "0x000B",
+            "unit": ""
+          },
+          {
+            "address": 56,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 56",
+            "parsed_value": "18",
+            "raw_hex": "0x0012",
+            "unit": ""
+          },
+          {
+            "address": 57,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 57",
+            "parsed_value": "4",
+            "raw_hex": "0x0004",
+            "unit": ""
+          },
+          {
+            "address": 58,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 58",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 59,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 59",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 60,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 60",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 61,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 61",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 62,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 62",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          },
+          {
+            "address": 63,
+            "description": "",
+            "function_code": 3,
+            "multiplier": 1.0,
+            "name": "Holding Register 63",
+            "parsed_value": "0",
+            "raw_hex": "0x0000",
+            "unit": ""
+          }
+        ]
+      }
+    ]
+  }
+]

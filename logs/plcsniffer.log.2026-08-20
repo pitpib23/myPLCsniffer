@@ -1,0 +1,46 @@
+2026-08-20 15:33:13,454 | INFO | {"event": "application_opened"}
+2026-08-20 15:33:13,461 | INFO | {"event": "application_closed"}
+2026-08-20 15:33:39,864 | INFO | {"event": "application_opened"}
+2026-08-20 15:33:39,913 | INFO | {"event": "application_closed"}
+2026-08-20 15:34:08,374 | INFO | {"event": "application_opened"}
+2026-08-20 15:34:08,376 | INFO | {"event": "application_closed"}
+2026-08-20 15:36:27,432 | INFO | {"event": "application_opened"}
+2026-08-20 15:36:27,443 | INFO | {"event": "application_closed"}
+2026-08-20 15:36:43,656 | INFO | {"event": "application_opened"}
+2026-08-20 15:36:43,661 | INFO | {"event": "application_closed"}
+2026-08-20 15:40:33,820 | INFO | {"event": "application_opened"}
+2026-08-20 15:40:33,891 | INFO | {"event": "application_closed"}
+2026-08-20 15:41:01,218 | INFO | {"event": "application_opened"}
+2026-08-20 15:41:01,222 | INFO | {"event": "application_closed"}
+2026-08-20 15:41:40,773 | INFO | {"event": "application_opened"}
+2026-08-20 15:41:40,775 | INFO | {"event": "application_closed"}
+2026-08-20 15:42:18,773 | INFO | {"event": "application_opened"}
+2026-08-20 15:42:19,894 | INFO | {"event": "application_closed"}
+2026-08-20 15:42:35,142 | INFO | {"event": "auto_detection_started", "port": "COM-TEST"}
+2026-08-20 15:42:35,144 | INFO | {"baudrate": 9600, "bytesize": 8, "event": "auto_detection_locked", "parity": "N", "port": "COM-TEST", "stopbits": 1.0, "tested_baudrates": [9600]}
+2026-08-20 15:42:35,145 | INFO | {"byte_count": 8, "event": "passive_modbus_frame_received", "port": "COM-TEST", "raw_hex": "01 03 00 00 00 01 84 0A"}
+2026-08-20 15:42:35,145 | INFO | {"event": "auto_detection_stopped", "port": "COM-TEST"}
+2026-08-20 15:42:35,148 | INFO | {"event": "capture_thread_start", "mode": "config", "port": "COM-TEST"}
+2026-08-20 15:42:35,366 | INFO | {"event": "application_opened"}
+2026-08-20 15:42:35,367 | INFO | {"event": "application_closed"}
+2026-08-20 15:42:35,374 | INFO | {"event": "auto_detection_started", "port": "COM-TEST"}
+2026-08-20 15:42:35,374 | INFO | {"baudrate": 9600, "bytesize": 8, "event": "auto_detection_locked", "parity": "N", "port": "COM-TEST", "stopbits": 1.0, "tested_baudrates": [9600]}
+2026-08-20 15:42:35,374 | INFO | {"byte_count": 8, "event": "passive_modbus_frame_received", "port": "COM-TEST", "raw_hex": "01 03 00 00 00 01 84 0A"}
+2026-08-20 15:42:35,374 | INFO | {"event": "auto_detection_stopped", "port": "COM-TEST"}
+2026-08-20 15:42:35,925 | INFO | {"event": "application_opened"}
+2026-08-20 15:42:35,942 | INFO | {"event": "application_closed"}
+2026-08-20 15:42:50,432 | INFO | {"event": "application_opened"}
+2026-08-20 15:42:50,600 | INFO | {"event": "application_closed"}
+2026-08-20 15:44:25,119 | INFO | {"event": "auto_detection_started", "port": "COM-TEST"}
+2026-08-20 15:44:25,123 | INFO | {"baudrate": 9600, "bytesize": 8, "event": "auto_detection_locked", "parity": "N", "port": "COM-TEST", "stopbits": 1.0, "tested_baudrates": [9600]}
+2026-08-20 15:44:25,124 | INFO | {"byte_count": 8, "event": "passive_modbus_frame_received", "port": "COM-TEST", "raw_hex": "01 03 00 00 00 01 84 0A"}
+2026-08-20 15:44:25,125 | INFO | {"event": "auto_detection_stopped", "port": "COM-TEST"}
+2026-08-20 15:44:25,128 | INFO | {"event": "capture_thread_start", "mode": "config", "port": "COM-TEST"}
+2026-08-20 15:44:25,806 | INFO | {"event": "application_opened"}
+2026-08-20 15:44:25,808 | INFO | {"event": "application_closed"}
+2026-08-20 15:44:25,816 | INFO | {"event": "auto_detection_started", "port": "COM-TEST"}
+2026-08-20 15:44:25,817 | INFO | {"baudrate": 9600, "bytesize": 8, "event": "auto_detection_locked", "parity": "N", "port": "COM-TEST", "stopbits": 1.0, "tested_baudrates": [9600]}
+2026-08-20 15:44:25,817 | INFO | {"byte_count": 8, "event": "passive_modbus_frame_received", "port": "COM-TEST", "raw_hex": "01 03 00 00 00 01 84 0A"}
+2026-08-20 15:44:25,818 | INFO | {"event": "auto_detection_stopped", "port": "COM-TEST"}
+2026-08-20 15:44:26,137 | INFO | {"event": "application_opened"}
+2026-08-20 15:44:26,144 | INFO | {"event": "application_closed"}

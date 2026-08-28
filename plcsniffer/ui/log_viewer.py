@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import codecs
+import os
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from plcsniffer.config import (
+    LOG_REFRESH_INTERVAL_MS,
+    LOG_VIEW_INITIAL_TAIL_BYTES,
+)
+from plcsniffer.logging_config import LOG_FILE_PATH
+from plcsniffer.ui.responsive import METRICS, ResponsiveMode
+
+
+class LogViewerWidget(QWidget):
+    """Read-only, automatically refreshed view of the active application log."""
+
+    INITIAL_TAIL_BYTES = LOG_VIEW_INITIAL_TAIL_BYTES
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        log_path: str | Path = LOG_FILE_PATH,
+        timer_interval_ms: int = LOG_REFRESH_INTERVAL_MS,
+        auto_start: bool = True,
+    ) -> None:
+        super().__init__(parent)
+        self.log_path = Path(log_path).expanduser().resolve()
+        self._file_identity: tuple[int, int] | None = None
+        self._position = 0
+        self._last_mtime_ns: int | None = None
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+        self._build_ui()
+        self.timer = QTimer(self)
+        self.timer.setInterval(max(1, int(timer_interval_ms)))
+        self.timer.timeout.connect(self.refresh_log)
+
+        self.refresh_log()
+        if auto_start:
+            self.timer.start()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        self._root_layout = layout
+
+        details = QHBoxLayout()
+        self._details_layout = details
+        details.addWidget(QLabel("Current log file:"))
+        self.path_label = QLabel(str(self.log_path))
+        self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.path_label.setToolTip(str(self.log_path))
+        # The full absolute path (longer once packaged, under a per-user
+        # app-data directory) would otherwise force this whole tab as wide
+        # as the path itself, since a non-wrapping QLabel never reports a
+        # minimumSizeHint narrower than its full text. Ignored lets the
+        # layout shrink it below that; resizeEvent() below keeps it legible
+        # by eliding the *displayed* text to fit, while the tooltip and
+        # selectable text still carry the full path.
+        self.path_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        details.addWidget(self.path_label, stretch=1)
+        self.status_label = QLabel("Checking log file...")
+        details.addWidget(self.status_label)
+        layout.addLayout(details)
+
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(10_000)
+        self.log_view.setPlaceholderText("Log entries will appear here.")
+        self.log_view.setStyleSheet(
+            'font-family: "Cascadia Mono", "Consolas", monospace; font-size: 10.5pt;'
+        )
+        layout.addWidget(self.log_view, stretch=1)
+        # Deferred: at construction time the label hasn't been laid out yet,
+        # so its width() is still Qt's pre-layout default rather than the
+        # real available space.
+        QTimer.singleShot(0, self._update_path_label_text)
+
+    def apply_responsive_mode(self, mode: ResponsiveMode) -> None:
+        """Densify the header row so the log view keeps most of the space.
+
+        This tab was already the least problematic one (log_view already
+        has stretch=1, so it already claims all remaining space) — the only
+        real lever left is shrinking the header row's own margins/spacing
+        and the log text's font a little, both reversible.
+        """
+        metrics = METRICS[mode]
+        self._root_layout.setContentsMargins(*([metrics.layout_margin] * 4))
+        self._details_layout.setSpacing(metrics.layout_spacing)
+        self.log_view.setStyleSheet(
+            'font-family: "Cascadia Mono", "Consolas", monospace; '
+            f"font-size: {metrics.base_font_pt + 0.5}pt;"
+        )
+        # Re-elide immediately: the header row's available width just
+        # changed along with its margins.
+        self._update_path_label_text()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_path_label_text()
+
+    def _update_path_label_text(self) -> None:
+        """Elide the displayed log path to whatever width is available.
+
+        Cheap (one QFontMetrics call), so it's fine to run on every resize
+        rather than deferring — see the module docstring's Raspberry Pi
+        note against expensive resize handlers.
+        """
+        metrics = self.path_label.fontMetrics()
+        available = self.path_label.width()
+        text = str(self.log_path)
+        elided = metrics.elidedText(text, Qt.ElideMiddle, available) if available > 0 else text
+        self.path_label.setText(elided)
+
+    @staticmethod
+    def _identity(stat_result: os.stat_result) -> tuple[int, int]:
+        return int(stat_result.st_dev), int(stat_result.st_ino)
+
+    def _reset_reader(self, *, clear_view: bool) -> None:
+        self._file_identity = None
+        self._position = 0
+        self._last_mtime_ns = None
+        self._decoder.reset()
+        if clear_view:
+            self.log_view.clear()
+
+    def _append_text(self, text: str) -> None:
+        if not text:
+            return
+        scroll_bar = self.log_view.verticalScrollBar()
+        was_at_end = scroll_bar.value() >= scroll_bar.maximum() - 1
+        cursor = QTextCursor(self.log_view.document())
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text)
+        if was_at_end:
+            scroll_bar.setValue(scroll_bar.maximum())
+
+    def refresh_log(self) -> None:
+        """Read new bytes and detect creation, replacement, or truncation."""
+        try:
+            with self.log_path.open("rb") as handle:
+                stat_result = os.fstat(handle.fileno())
+                identity = self._identity(stat_result)
+                replaced = (
+                    self._file_identity is not None and identity != self._file_identity
+                )
+                truncated = stat_result.st_size < self._position
+                same_size_rewrite = (
+                    self._last_mtime_ns is not None
+                    and stat_result.st_size == self._position
+                    and stat_result.st_mtime_ns != self._last_mtime_ns
+                )
+                if replaced or truncated or same_size_rewrite:
+                    self._reset_reader(clear_view=True)
+
+                self._file_identity = identity
+                if (
+                    self._position == 0
+                    and stat_result.st_size > self.INITIAL_TAIL_BYTES
+                ):
+                    handle.seek(stat_result.st_size - self.INITIAL_TAIL_BYTES)
+                    handle.readline()
+                    self._position = handle.tell()
+                else:
+                    handle.seek(self._position)
+
+                payload = handle.read()
+                self._position = handle.tell()
+                latest_stat = os.fstat(handle.fileno())
+                self._last_mtime_ns = latest_stat.st_mtime_ns
+        except FileNotFoundError:
+            self._reset_reader(clear_view=True)
+            self.status_label.setText("Waiting for the log file to be created.")
+            return
+        except OSError as error:
+            self.status_label.setText(f"Unable to read log file: {error}")
+            return
+
+        self._append_text(self._decoder.decode(payload, final=False))
+        self.status_label.setText(f"Live — {self._position:,} bytes")
+
+    def start_refresh(self) -> None:
+        """Start periodic log-file refreshes."""
+        self.timer.start()
+
+    def stop_refresh(self) -> None:
+        """Stop periodic log-file refreshes."""
+        self.timer.stop()
