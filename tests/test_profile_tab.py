@@ -751,9 +751,7 @@ class ProfileCrudWorkflowTests(ProfileTabTestCase):
 
         self.assertEqual(len(self.tab.profiles), before)
 
-    def test_reset_filters_clears_all_filters(self) -> None:
-        # No free-text search on Lite (see profile_tab.py's
-        # _build_register_controls_row) — only the dropdown filters below.
+    def test_reset_filters_clears_search_and_all_filters(self) -> None:
         self.tab.add_profile()
         # A slave only becomes a filter option once it has a register (see
         # SlaveIdColumnEditingTests.
@@ -761,12 +759,14 @@ class ProfileCrudWorkflowTests(ProfileTabTestCase):
         # so add one to give slave_filter a second item ("Slave 0") to
         # actually move away from.
         self.tab.add_register()
+        self.tab.search_edit.setText("something")
         self.tab.function_code_filter.setCurrentIndex(1)
         self.assertGreater(self.tab.slave_filter.count(), 1)
         self.tab.slave_filter.setCurrentIndex(1)
 
         self.tab.reset_filters()
 
+        self.assertEqual(self.tab.search_edit.text(), "")
         self.assertEqual(self.tab.function_code_filter.currentIndex(), 0)
         self.assertEqual(self.tab.slave_filter.currentIndex(), 0)
         self.assertIsNone(self.tab.slave_filter.currentData())
@@ -945,6 +945,14 @@ class SharedRegisterTableMultiSlaveTests(ProfileTabTestCase):
 
         self.assertEqual(self._visible_names(), {"r10", "r10b", "r20"})
 
+    def test_slave_filter_combines_with_search_text(self) -> None:
+        self._add_multi_slave_profile()
+        self.tab.slave_filter.setCurrentIndex(self.tab.slave_filter.findData(2))
+
+        self.tab.search_edit.setText("r20")
+
+        self.assertEqual(self._visible_names(), {"r20"})
+
     def test_slave_filter_combines_with_function_code_filter(self) -> None:
         self._add_multi_slave_profile()
         self.tab.slave_filter.setCurrentIndex(self.tab.slave_filter.findData(2))
@@ -959,11 +967,13 @@ class SharedRegisterTableMultiSlaveTests(ProfileTabTestCase):
     def test_reset_filters_restores_all_slaves(self) -> None:
         self._add_multi_slave_profile()
         self.tab.slave_filter.setCurrentIndex(self.tab.slave_filter.findData(2))
+        self.tab.search_edit.setText("r20")
         self.tab.function_code_filter.setCurrentIndex(1)
 
         self.tab.reset_filters()
 
         self.assertIsNone(self.tab.slave_filter.currentData())
+        self.assertEqual(self.tab.search_edit.text(), "")
         self.assertEqual(self.tab.function_code_filter.currentIndex(), 0)
         self.assertEqual(self._visible_names(), {"r10", "r10b", "r20"})
 

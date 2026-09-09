@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMenu,
     QPushButton,
-    QScroller,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from plcsniffer.config import (
     CAPTURE_TABLE_MINIMUM_HEIGHT,
     DEFAULT_BAUD_RATES,
+    FILTER_DEBOUNCE_MS,
 )
 from plcsniffer.config import MAX_PAUSED_PACKETS as DEFAULT_MAX_PAUSED_PACKETS
 from plcsniffer.config import (
@@ -317,13 +318,13 @@ class PassiveSniffingWidget(QWidget):
         layout.setSpacing(8)
         self._root_layout = layout
 
-        # Kept compact (one line, no wrap) on Lite: it's an important safety
-        # statement, not a workflow tip, so it stays visible — just without
-        # spending as much of an 800x480 screen's vertical budget as the
-        # desktop's wrapped multi-line banner did.
-        notice = QLabel("Receive-only: this application never transmits Modbus requests.")
+        notice = QLabel(
+            "Receive-only passive sniffing: this application never transmits Modbus "
+            "requests. Double-click any captured packet to open Packet Inspector."
+        )
+        notice.setWordWrap(True)
         notice.setStyleSheet(
-            "padding: 4px 8px; background: #ecfdf5; border: 1px solid #86d3b0;"
+            "padding: 8px; background: #ecfdf5; border: 1px solid #86d3b0;"
         )
         layout.addWidget(notice)
 
@@ -409,7 +410,7 @@ class PassiveSniffingWidget(QWidget):
 
         self.start_btn = QPushButton("Start Passive Sniffing")
         self.start_btn.setProperty("role", "primary")
-        self.start_btn.setMinimumHeight(44)
+        self.start_btn.setMinimumHeight(38)
         self.start_btn.clicked.connect(self.toggle_monitor)
 
         # Kept as attributes (not local QLabels) purely so
@@ -490,16 +491,19 @@ class PassiveSniffingWidget(QWidget):
         settings.addWidget(self.mode_hint, 12, 0, 1, 8)
         layout.addWidget(settings_group)
 
-        # No free-text search on Lite: it's the one control here that would
-        # invoke the on-screen keyboard during ordinary field use. The
-        # dropdown filters below need no typing, so they're kept — see
-        # _apply_filter()/_filters_are_active(), which no longer reference
-        # any text query.
-        filters_row = QWidget()
-        filters = QGridLayout(filters_row)
-        filters.setContentsMargins(0, 0, 0, 0)
+        filters_group = QGroupBox("Packet Filters")
+        filters = QGridLayout(filters_group)
         filters.setColumnStretch(1, 1)
-        filters.setColumnStretch(3, 1)
+        self.search = QLineEdit()
+        self.search.setClearButtonEnabled(True)
+        self.search.setPlaceholderText(
+            "Search address, value, description, or raw RTU bytes..."
+        )
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(FILTER_DEBOUNCE_MS)
+        self._filter_timer.timeout.connect(self._apply_filter)
+        self.search.textChanged.connect(self._schedule_filter)
 
         self.direction_filter = QComboBox()
         self.direction_filter.addItem("All directions", None)
@@ -548,21 +552,17 @@ class PassiveSniffingWidget(QWidget):
         self.filter_count_label = QLabel("Showing 0 of 0 packets")
         self.filter_count_label.setStyleSheet("color: #526174; font-weight: 600;")
 
-        # Compact two-row arrangement of touch-friendly dropdown filters —
-        # no group-box border/title around them (they're four small
-        # controls, not a form worth a whole card) — plus Reset and the
-        # count, all with no keyboard input required.
-        filters.addWidget(QLabel("Direction"), 0, 0)
-        filters.addWidget(self.direction_filter, 0, 1)
-        filters.addWidget(QLabel("Type"), 0, 2)
-        filters.addWidget(self.frame_type_filter, 0, 3)
-        filters.addWidget(self.reset_filters_btn, 0, 4)
-        filters.addWidget(QLabel("Slave"), 1, 0)
-        filters.addWidget(self.slave_filter, 1, 1)
-        filters.addWidget(QLabel("Function"), 1, 2)
-        filters.addWidget(self.function_filter, 1, 3)
-        filters.addWidget(self.filter_count_label, 1, 4)
-        layout.addWidget(filters_row)
+        # Two rows of three filters rather than one row of six — halves the
+        # width this group needs on a small screen without hiding anything.
+        filters.addWidget(QLabel("Search"), 0, 0)
+        filters.addWidget(self.search, 0, 1, 1, 2)
+        filters.addWidget(self.direction_filter, 1, 0)
+        filters.addWidget(self.frame_type_filter, 1, 1)
+        filters.addWidget(self.reset_filters_btn, 1, 2)
+        filters.addWidget(self.slave_filter, 2, 0)
+        filters.addWidget(self.function_filter, 2, 1)
+        filters.addWidget(self.filter_count_label, 2, 2)
+        layout.addWidget(filters_group)
 
         # A QGridLayout (not QHBoxLayout) even in its one-row Normal form —
         # _reflow_actions_row() below repositions these same widgets into
@@ -578,12 +578,6 @@ class PassiveSniffingWidget(QWidget):
         self.pause_btn.toggled.connect(self._set_paused)
         self.clear_btn = QPushButton("Clear Packets")
         self.clear_btn.clicked.connect(self.clear_messages)
-        # Explicit touch access path to inspection, additional to (and
-        # behaviorally identical to) double-clicking a row — a touchscreen
-        # double-tap can be unreliable, per the task's touch-scroll
-        # requirements. Double-click keeps working unchanged.
-        self.inspect_btn = QPushButton("Inspect")
-        self.inspect_btn.clicked.connect(self.inspect_selected_row)
         # Less-frequent actions tucked behind one menu button instead of
         # sitting in the row at equal weight to Pause/Clear — same slots as
         # before, just relocated.
@@ -634,20 +628,13 @@ class PassiveSniffingWidget(QWidget):
             "anything not currently shown."
         )
 
-        # Touch targets: Lite's primary field-use actions get a comfortable
-        # finger-sized minimum height. The persistent "Tip: double-click a
-        # row..." label from the desktop build is dropped entirely rather
-        # than reflowed — inspect_btn above is the discoverable, always-
-        # visible replacement for it (double-click itself still works too).
-        for button in (
-            self.pause_btn,
-            self.clear_btn,
-            self.inspect_btn,
-            self.more_btn,
-            self.save_profile_btn,
-        ):
-            button.setMinimumHeight(44)
-
+        # Purely a hint, not a control — the first thing dropped in
+        # Compact/Ultra-compact (see _reflow_actions_row), matching the
+        # task's priority of collapsing secondary/non-critical information
+        # before anything that's actually interactive.
+        self._double_click_tip_label = QLabel(
+            "Tip: double-click a row for full inspection"
+        )
         self._reflow_actions_row(compact=False)
         layout.addLayout(actions)
 
@@ -684,35 +671,11 @@ class PassiveSniffingWidget(QWidget):
         self.message_table.verticalHeader().setDefaultSectionSize(24)
         self.message_table.setWordWrap(False)
         self.message_table.setMinimumHeight(CAPTURE_TABLE_MINIMUM_HEIGHT)
-        # Lite's table strategy is scroll-not-shrink: columns keep their
-        # existing readable widths (below) rather than being compressed to
-        # fit 800px, and both scrollbars are explicit/pixel-accurate so a
-        # finger swipe covers the rest. QScroller's TouchGesture (not
-        # LeftMouseButtonGesture) only engages for actual touch input, so
-        # mouse click-to-select during desktop development is unaffected.
-        self.message_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.message_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.message_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.message_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        QScroller.grabGesture(
-            self.message_table.viewport(), QScroller.TouchGesture
-        )
-        # Scroll, don't shrink (Lite's table strategy): every column,
-        # including Raw RTU Frame, is Interactive with a fixed natural
-        # width rather than the desktop build's Stretch on the last column
-        # — on an 800px-wide screen the 8 columns already add up to more
-        # than that (by design), so the table gets a real horizontal
-        # scrollbar instead of always compressing the raw bytes to
-        # whatever width happens to be left over.
         header = self.message_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        for column, width in enumerate((105, 135, 65, 220, 125, 100, 70, 260)):
+        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        for column, width in enumerate((105, 135, 65, 220, 125, 100, 70)):
             self.message_table.setColumnWidth(column, width)
-        # Lets Raw RTU Frame grow to fill genuine extra width on a wide
-        # window (no dead gap after the last column) without ever shrinking
-        # it below the floor set above — same reasoning as the byte table
-        # in packet_inspector.py.
-        header.setStretchLastSection(True)
         self.message_table.cellDoubleClicked.connect(self._inspect_row)
         layout.addWidget(self.message_table, stretch=1)
 
@@ -744,30 +707,35 @@ class PassiveSniffingWidget(QWidget):
             grid.addWidget(self.refresh_btn, 0, 4)
 
     def _reflow_actions_row(self, *, compact: bool) -> None:
-        """Arrange the Pause/Clear/Inspect/More/Save-as-Profile row for the density.
+        """Arrange the Pause/Clear/More/Save-as-Profile row for the density.
 
-        Normal: one row, all six controls. Compact/Ultra-compact: two rows
-        (Pause/Clear/Inspect, then More/Save as Profile/info icon) — no
-        trailing hint label on Lite (see _build_ui), so there's nothing to
-        drop here the way the desktop build's tip label was.
+        Normal: one row, all five controls plus the trailing hint label —
+        the layout this tab has always used. Compact/Ultra-compact: two
+        rows (Pause/Clear/More, then Save as Profile/info icon) and the
+        hint label is dropped entirely rather than reflowed — it's the
+        least essential thing in this row (a nice-to-know, not a control),
+        so it's the first thing to go per the task's priority of collapsing
+        secondary information before anything interactive.
         """
         grid = self._actions_grid
+        self._double_click_tip_label.setVisible(not compact)
         if compact:
             grid.addWidget(self.pause_btn, 0, 0)
             grid.addWidget(self.clear_btn, 0, 1)
-            grid.addWidget(self.inspect_btn, 0, 2)
-            grid.addWidget(self.more_btn, 1, 0)
-            grid.addWidget(self.save_profile_btn, 1, 1)
-            grid.addWidget(self.save_profile_info_icon, 1, 2)
-            grid.setColumnStretch(3, 1)
+            grid.addWidget(self.more_btn, 0, 2)
+            grid.addWidget(self.save_profile_btn, 1, 0)
+            grid.addWidget(self.save_profile_info_icon, 1, 1)
+            grid.setColumnStretch(2, 0)
+            grid.setColumnStretch(6, 1)
         else:
             grid.addWidget(self.pause_btn, 0, 0)
             grid.addWidget(self.clear_btn, 0, 1)
-            grid.addWidget(self.inspect_btn, 0, 2)
-            grid.addWidget(self.more_btn, 0, 3)
-            grid.addWidget(self.save_profile_btn, 0, 4)
-            grid.addWidget(self.save_profile_info_icon, 0, 5)
-            grid.setColumnStretch(6, 1)
+            grid.addWidget(self.more_btn, 0, 2)
+            grid.addWidget(self.save_profile_btn, 0, 3)
+            grid.addWidget(self.save_profile_info_icon, 0, 4)
+            grid.addWidget(self._double_click_tip_label, 0, 6)
+            grid.setColumnStretch(2, 0)
+            grid.setColumnStretch(5, 1)
 
     def apply_responsive_mode(self, mode: ResponsiveMode) -> None:
         """Densify this tab's own layouts and reflow the Setup/Actions rows.
@@ -954,6 +922,9 @@ class PassiveSniffingWidget(QWidget):
     def _on_error(self, message: str) -> None:
         self._set_status_message(message, "warning")
 
+    def _schedule_filter(self, *_args) -> None:
+        self._filter_timer.start()
+
     def _on_statistics(self, counts: dict) -> None:
         errors = int(counts.get("crc_errors", 0)) + int(counts.get("unmatched", 0))
         self.stats_label.setText(
@@ -1048,22 +1019,8 @@ class PassiveSniffingWidget(QWidget):
         if packet is not None:
             self.packet_inspection_requested.emit(packet)
 
-    def inspect_selected_row(self) -> None:
-        """Inspect the currently selected row (the Inspect button's handler).
-
-        Same target (packet_inspection_requested) and behavior as
-        double-clicking a row (_inspect_row) — an additional access path for
-        a touchscreen where double-tap can be unreliable, per the task's
-        touch-scroll requirements. Double-click keeps working unchanged.
-        """
-        rows = sorted({index.row() for index in self.message_table.selectedIndexes()})
-        if not rows:
-            self._set_status_message("Select a captured row to inspect.", "warning")
-            return
-        self._inspect_row(rows[0], 0)
-
     def _filters_are_active(self) -> bool:
-        return any(
+        return bool(self.search.text().strip()) or any(
             combo.currentData() is not None
             for combo in (
                 self.direction_filter,
@@ -1074,6 +1031,7 @@ class PassiveSniffingWidget(QWidget):
         )
 
     def _apply_filter(self, *_args) -> None:
+        query = self.search.text().strip().lower()
         direction = self.direction_filter.currentData()
         frame_type = self.frame_type_filter.currentData()
         slave_id = self.slave_filter.currentData()
@@ -1085,8 +1043,15 @@ class PassiveSniffingWidget(QWidget):
             if packet is None:
                 self.message_table.setRowHidden(row, True)
                 continue
+            searchable = " ".join(
+                self.message_table.item(row, column).text()
+                for column in range(self.message_table.columnCount())
+                if self.message_table.item(row, column) is not None
+            )
+            searchable = f"{searchable} {packet.description}".lower()
             matches = (
-                (direction is None or packet.direction == direction)
+                (not query or query in searchable)
+                and (direction is None or packet.direction == direction)
                 and (frame_type is None or packet.frame_type == frame_type)
                 and (slave_id is None or packet.slave_id == slave_id)
                 and (function_code is None or packet.function_code == function_code)
@@ -1099,10 +1064,11 @@ class PassiveSniffingWidget(QWidget):
         filters_active = any(
             value is not None
             for value in (direction, frame_type, slave_id, function_code)
-        )
+        ) or bool(query)
         self.reset_filters_btn.setEnabled(filters_active)
 
     def reset_filters(self) -> None:
+        self.search.clear()
         for combo in (
             self.direction_filter,
             self.frame_type_filter,

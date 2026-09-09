@@ -307,8 +307,7 @@ class PassiveSniffingWidgetTests(QtWidgetTestCase):
             stored = widget.message_table.item(0, 0).data(Qt.UserRole)
             self.assertIs(stored, matching)
 
-            # No free-text search on Lite (see passive_capture.py) — only
-            # the dropdown filters below need to combine correctly.
+            widget.search.setText("temperature")
             widget.direction_filter.setCurrentIndex(
                 widget.direction_filter.findData("Master \u2192 Slave")
             )
@@ -539,15 +538,17 @@ class MainWindowTests(QtWidgetTestCase):
         with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
             window = MainWindow()
         try:
-            # Lite exposes exactly Sniff / Inspect / Profile — no numbered
-            # prefixes (short, touch-friendly labels) and no Logging tab.
-            self.assertEqual(window.tabs.count(), 3)
+            self.assertEqual(window.tabs.count(), 4)
             self.assertEqual(
-                [window.tabs.tabText(index) for index in range(3)],
-                ["Sniff", "Inspect", "Profile"],
+                [window.tabs.tabText(index) for index in range(4)],
+                [
+                    "1. Passive Sniffing",
+                    "2. Packet Inspector",
+                    "3. Logging",
+                    "4. Profile",
+                ],
             )
             self.assertEqual(window.tabs.currentIndex(), 0)
-            self.assertFalse(hasattr(window, "logging_page"))
 
             packet = request_frame(slave_id=9, description="Route this packet")
             window.passive_page._on_frame(packet)
@@ -556,6 +557,7 @@ class MainWindowTests(QtWidgetTestCase):
             self.assertIs(window.packet_inspector.current_packet, packet)
             self.assertIn("slave 9", window.packet_inspector.help_label.text())
         finally:
+            window.logging_page.stop_refresh()
             window.close()
             window.deleteLater()
             APP.processEvents()
@@ -571,6 +573,7 @@ class MainWindowTests(QtWidgetTestCase):
             window.closeEvent(event)
             self.assertTrue(event.isAccepted())
         finally:
+            window.logging_page.stop_refresh()
             window.close()
             window.deleteLater()
             APP.processEvents()
@@ -590,6 +593,7 @@ class MainWindowTests(QtWidgetTestCase):
                 warning.assert_called_once()
                 self.assertFalse(event.isAccepted())
         finally:
+            window.logging_page.stop_refresh()
             window.close()
             window.deleteLater()
             APP.processEvents()

@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
-    QScroller,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -95,7 +94,6 @@ class PacketInspectorWidget(QWidget):
         self.show_all_btn = QPushButton("Show All Packet Information")
         self.show_all_btn.setCheckable(True)
         self.show_all_btn.setEnabled(False)
-        self.show_all_btn.setMinimumHeight(44)
         self.show_all_btn.toggled.connect(self._toggle_all_information)
         summary_layout.addWidget(self.show_all_btn)
 
@@ -129,17 +127,11 @@ class PacketInspectorWidget(QWidget):
         self.byte_table.setAlternatingRowColors(True)
         self.byte_table.setWordWrap(True)
         self.byte_table.verticalHeader().setVisible(False)
-        # Keep the header visible by scrolling inside this table. Lite
-        # enables the horizontal scrollbar too (the desktop build forced it
-        # off) — see the Meaning column below, which no longer stretches to
-        # fill whatever width is left, so this is what actually reaches it
-        # on an 800px-wide screen.
+        # Keep the header visible by scrolling inside this table.
         self.byte_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.byte_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.byte_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.byte_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.byte_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.byte_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
-        QScroller.grabGesture(self.byte_table.viewport(), QScroller.TouchGesture)
         # Expanding in both directions (was Expanding/Fixed with a
         # setFixedHeight computed for up to 16 rows): this table now claims
         # whatever vertical space the tab actually has, growing past 16
@@ -149,20 +141,10 @@ class PacketInspectorWidget(QWidget):
         self.byte_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.byte_table.setMinimumHeight(INSPECTOR_BYTE_TABLE_MINIMUM_HEIGHT)
 
-        # Meaning is Interactive with a readable floor width rather than
-        # plain Stretch — on a narrow screen, Stretch would compress it down
-        # to whatever's left over (or unreadably narrow once the tab is
-        # itself narrower than the other four columns need); scroll, don't
-        # shrink, is what the horizontal scrollbar enabled above is for.
-        # setStretchLastSection still lets it grow to fill genuine extra
-        # width on a wide/desktop window, it just never shrinks it below
-        # the floor set here.
         byte_header = self.byte_table.horizontalHeader()
         for column in range(4):
             byte_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        byte_header.setSectionResizeMode(4, QHeaderView.Interactive)
-        self.byte_table.setColumnWidth(4, 260)
-        byte_header.setStretchLastSection(True)
+        byte_header.setSectionResizeMode(4, QHeaderView.Stretch)
         all_layout.addWidget(self.byte_table, stretch=1)
 
         self.all_information_group.setSizePolicy(
