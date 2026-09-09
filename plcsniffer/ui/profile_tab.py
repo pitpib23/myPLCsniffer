@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScroller,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
@@ -450,9 +451,11 @@ class ProfileTab(QWidget):
         button_layout = QHBoxLayout()
         self.add_profile_btn = QPushButton("Add")
         self.add_profile_btn.setToolTip("Add a new profile")
+        self.add_profile_btn.setMinimumHeight(44)
         self.add_profile_btn.clicked.connect(self.add_profile)
         self.remove_profile_btn = QPushButton("Remove")
         self.remove_profile_btn.setToolTip("Remove the selected profile")
+        self.remove_profile_btn.setMinimumHeight(44)
         self.remove_profile_btn.clicked.connect(self.remove_profile)
         button_layout.addWidget(self.add_profile_btn)
         button_layout.addWidget(self.remove_profile_btn)
@@ -519,15 +522,18 @@ class ProfileTab(QWidget):
         row.addStretch()
 
         self.edit_profile_btn = QPushButton("Edit Profile")
+        self.edit_profile_btn.setMinimumHeight(44)
         self.edit_profile_btn.clicked.connect(self.enter_edit_mode)
         row.addWidget(self.edit_profile_btn)
 
         self.save_profile_btn = QPushButton("Save Profile")
         self.save_profile_btn.setProperty("role", "primary")
+        self.save_profile_btn.setMinimumHeight(44)
         self.save_profile_btn.clicked.connect(self.save_and_exit_edit_mode)
         row.addWidget(self.save_profile_btn)
 
         self.discard_changes_btn = QPushButton("Discard Changes")
+        self.discard_changes_btn.setMinimumHeight(44)
         self.discard_changes_btn.clicked.connect(self.discard_changes)
         row.addWidget(self.discard_changes_btn)
 
@@ -600,14 +606,12 @@ class ProfileTab(QWidget):
         parent_layout.addWidget(self.profile_summary_label)
 
     def _build_register_controls_row(self, parent_layout: QVBoxLayout) -> None:
-        # Search/filter and add/remove share one row instead of a filter
-        # group box plus a separate toolbar row — two fewer rows, and one
-        # fewer group-box border, of vertical space spent before the table.
+        # No free-text "Search registers..." field on Lite — same reasoning
+        # as Passive Sniffing's dropped search box (on-screen-keyboard
+        # interaction is poor for field use). Slave/Function dropdowns need
+        # no typing, so they're kept — see _apply_filter()/reset_filters(),
+        # which no longer reference any text query.
         row = QHBoxLayout()
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search registers...")
-        self.search_edit.textChanged.connect(self._apply_filter)
-        row.addWidget(self.search_edit, 3)
 
         # One PLC profile may contain several Modbus slave IDs (see
         # passive_capture.PassiveSniffingWidget.current_profile_data) — all
@@ -646,10 +650,12 @@ class ProfileTab(QWidget):
         row.addSpacing(16)
 
         self.add_register_btn = QPushButton("Add Register")
+        self.add_register_btn.setMinimumHeight(44)
         self.add_register_btn.clicked.connect(self.add_register)
         row.addWidget(self.add_register_btn)
 
         self.remove_register_btn = QPushButton("Remove Register")
+        self.remove_register_btn.setMinimumHeight(44)
         self.remove_register_btn.clicked.connect(self.remove_register)
         row.addWidget(self.remove_register_btn)
 
@@ -681,8 +687,8 @@ class ProfileTab(QWidget):
         self.sniff_toggle_btn.setProperty("role", "primary")
         # Matches Tab 1's start_btn height exactly — same recurring action
         # (Start/Stop Passive Sniffing) gets the same visual weight on both
-        # tabs.
-        self.sniff_toggle_btn.setMinimumHeight(38)
+        # tabs, and both meet Lite's ~44px touch-target floor.
+        self.sniff_toggle_btn.setMinimumHeight(44)
         self.sniff_toggle_btn.clicked.connect(self.toggle_sniffing)
         row.addWidget(self.sniff_toggle_btn)
         row.addStretch()
@@ -733,6 +739,19 @@ class ProfileTab(QWidget):
         header.setSectionResizeMode(10, QHeaderView.Stretch)
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.setWordWrap(False)
+        # Lite's table strategy is scroll-not-shrink: all 13 columns keep
+        # their existing readable widths (below) rather than being hidden
+        # or compressed to fit 800px — a finger swipe reaches the rest.
+        # QScroller's TouchGesture only engages for actual touch input, so
+        # mouse-driven cell selection/editing during desktop development is
+        # unaffected.
+        self.register_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.register_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.register_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.register_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        QScroller.grabGesture(
+            self.register_table.viewport(), QScroller.TouchGesture
+        )
         self.register_table.setColumnWidth(0, 150)
         self.register_table.setColumnWidth(_SLAVE_ID_COLUMN, 70)  # fits 3-digit slave IDs
         self.register_table.setColumnWidth(_FUNCTION_CODE_COLUMN, 210)  # fits "0x03 Read Holding Registers"
@@ -1009,7 +1028,7 @@ class ProfileTab(QWidget):
     def _set_profile_controls_enabled(self, enabled: bool) -> None:
         self.profile_name_edit.setReadOnly(not enabled)
         self.config_group.setEnabled(enabled)
-        # slave_filter (like search_edit/function_code_filter) narrows which
+        # slave_filter (like function_code_filter) narrows which
         # already-visible rows are shown — that's not an edit action, so it
         # stays usable read-only; the Slave ID column itself is only
         # editable once register_table's own edit triggers are unlocked
@@ -2180,19 +2199,15 @@ class ProfileTab(QWidget):
         return self.sniff_capture_service.shutdown(timeout_ms)
 
     def _apply_filter(self, *_args) -> None:
-        query = self.search_edit.text().strip().lower()
         slave_id = self.slave_filter.currentData()
         function_code = self.function_code_filter.currentData()
 
         for row in range(self.register_table.rowCount()):
             item_name = self.register_table.item(row, 0)
-            item_description = self.register_table.item(row, 10)
             if item_name is None:
                 self.register_table.setRowHidden(row, False)
                 continue
-            name = item_name.text().lower()
-            description = item_description.text().lower() if item_description else ""
-            matches = (not query or query in name or query in description)
+            matches = True
             if slave_id is not None and row < len(self._row_slaves):
                 matches = matches and self._row_slaves[row].get("slave_id") == slave_id
             if function_code is not None and row < len(self._row_registers):
@@ -2200,7 +2215,6 @@ class ProfileTab(QWidget):
             self.register_table.setRowHidden(row, not matches)
 
     def reset_filters(self) -> None:
-        self.search_edit.clear()
         self.slave_filter.setCurrentIndex(0)
         self.function_code_filter.setCurrentIndex(0)
         self._apply_filter()

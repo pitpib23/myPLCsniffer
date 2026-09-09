@@ -22,7 +22,6 @@ from plcsniffer.config import (
 )
 from plcsniffer.logging_config import log_event
 from plcsniffer.modbus import CapturedModbusFrame
-from plcsniffer.ui.log_viewer import LogViewerWidget
 from plcsniffer.ui.packet_inspector import PacketInspectorWidget
 from plcsniffer.ui.passive_capture import PassiveSniffingWidget
 from plcsniffer.ui.profile_tab import ProfileTab
@@ -184,13 +183,20 @@ APP_THEME = _build_theme(METRICS[ResponsiveMode.NORMAL])
 
 
 class MainWindow(QMainWindow):
-    """Four-tab shell for receive-only capture, inspection, logs, and profiles."""
+    """Three-tab Lite shell for receive-only capture, inspection, and profiles.
+
+    Lite edition for a Raspberry Pi 7" touchscreen (800x480 landscape): the
+    Logging tab/LogViewerWidget is dropped from navigation (see
+    _initial_size()) — the backend Python logging (logging_config.py,
+    log_event()) is untouched and keeps writing to disk regardless, there's
+    just no in-app viewer tab for it any more.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APPLICATION_NAME)
         self.setMinimumSize(MAIN_WINDOW_MINIMUM_WIDTH, MAIN_WINDOW_MINIMUM_HEIGHT)
-        self.resize(1400, 900)
+        self.resize(*self._initial_size())
         # None (not a real mode) until _recompute_responsive_mode()'s first
         # call at the end of __init__ — that first call must always apply
         # to every tab, even when the computed mode happens to be NORMAL,
@@ -205,23 +211,20 @@ class MainWindow(QMainWindow):
         self.passive_page = PassiveSniffingWidget()
         self.packet_inspector = PacketInspectorWidget()
         self.profile_tab = ProfileTab()
-        self.logging_page = LogViewerWidget()
         # Every tab implements apply_responsive_mode(mode) for the parts a
         # shared stylesheet can't reach — see _recompute_responsive_mode().
         self._responsive_tabs = (
             self.passive_page,
             self.packet_inspector,
             self.profile_tab,
-            self.logging_page,
         )
 
         self.passive_tab = self._make_scrollable(self.passive_page)
         self.packet_inspector_tab = self._make_scrollable(self.packet_inspector)
         self.profile_tab_widget = self._make_scrollable(self.profile_tab)
-        self.tabs.addTab(self.passive_tab, "1. Passive Sniffing")
-        self.tabs.addTab(self.packet_inspector_tab, "2. Packet Inspector")
-        self.tabs.addTab(self.logging_page, "3. Logging")
-        self.tabs.addTab(self.profile_tab_widget, "4. Profile")
+        self.tabs.addTab(self.passive_tab, "Sniff")
+        self.tabs.addTab(self.packet_inspector_tab, "Inspect")
+        self.tabs.addTab(self.profile_tab_widget, "Profile")
 
         self.passive_page.packet_inspection_requested.connect(self.inspect_packet)
         self.passive_page.frame_observed.connect(self.profile_tab.set_latest_frame)
@@ -255,6 +258,27 @@ class MainWindow(QMainWindow):
         # later resize.
         self._recompute_responsive_mode()
         log_event(logging.INFO, "application_opened")
+
+    @staticmethod
+    def _initial_size() -> tuple[int, int]:
+        """Startup window size, targeting a 7" 800x480 Pi touchscreen.
+
+        Uses the primary screen's *available* geometry (excludes panels/
+        window-manager chrome) rather than assuming the full 800x480 is
+        free — never relies on a 900px-tall window (the old desktop
+        default) and never requests more than the target 800x480 either,
+        so a genuinely small panel isn't asked to grow a maximized window
+        past its own size.
+        """
+        target_width, target_height = 800, 480
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return target_width, target_height
+        available = screen.availableGeometry()
+        return (
+            max(MAIN_WINDOW_MINIMUM_WIDTH, min(target_width, available.width())),
+            max(MAIN_WINDOW_MINIMUM_HEIGHT, min(target_height, available.height())),
+        )
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -328,7 +352,6 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.profile_tab_widget)
 
     def closeEvent(self, event) -> None:
-        self.logging_page.stop_refresh()
         # Both calls must run regardless of the first result — each stops
         # and joins its own worker thread, so short-circuiting would leave
         # the second tab's serial port open.
@@ -340,7 +363,6 @@ class MainWindow(QMainWindow):
                 "Still closing",
                 "The passive serial sniffer is still closing. Please try again in a moment.",
             )
-            self.logging_page.start_refresh()
             event.ignore()
             return
         log_event(logging.INFO, "application_closed")

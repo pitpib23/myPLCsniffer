@@ -165,7 +165,6 @@ class MainWindowResponsiveTestCase(unittest.TestCase):
         APP.processEvents()
 
     def tearDown(self) -> None:
-        self.window.logging_page.stop_refresh()
         self.window.close()
         self.window.deleteLater()
         APP.processEvents()
@@ -185,8 +184,14 @@ class MainWindowResponsiveTestCase(unittest.TestCase):
 
 
 class MainWindowModeTransitionTests(MainWindowResponsiveTestCase):
-    def test_starts_in_normal_mode_at_default_size(self) -> None:
-        self.assertIs(self.window._responsive_mode, ResponsiveMode.NORMAL)
+    def test_starts_in_compact_mode_at_the_lite_default_size(self) -> None:
+        """Lite's default window targets an 800x480 Pi panel (see
+        MainWindow._initial_size()), which computes as COMPACT — unlike the
+        desktop pi branch's 1400x900 default, which computed as NORMAL.
+        """
+        self.assertEqual(self.window.size().width(), 800)
+        self.assertEqual(self.window.size().height(), 480)
+        self.assertIs(self.window._responsive_mode, ResponsiveMode.COMPACT)
 
     def test_shrinking_to_small_landscape_enters_compact(self) -> None:
         self.resize_and_settle(1024, 600)
@@ -222,7 +227,6 @@ class MainWindowModeTransitionTests(MainWindowResponsiveTestCase):
             for tab in (
                 self.window.passive_tab,
                 self.window.packet_inspector_tab,
-                self.window.logging_page,
                 self.window.profile_tab_widget,
             ):
                 self.window.tabs.setCurrentWidget(tab)
@@ -279,6 +283,10 @@ class MainWindowCriticalWidgetsRemainReachableTests(MainWindowResponsiveTestCase
 
 class PassiveSniffingReflowTests(MainWindowResponsiveTestCase):
     def test_setup_row_is_one_row_at_normal(self) -> None:
+        # Lite's default construction size (800x480) is itself COMPACT (see
+        # MainWindow._initial_size()), so NORMAL layout has to be reached
+        # explicitly here rather than assumed from the unresized window.
+        self.resize_and_settle(1400, 900)
         pp = self.window.passive_page
         grid = pp._settings_grid
         _, mode_col, _, mode_span = grid.getItemPosition(
@@ -301,6 +309,10 @@ class PassiveSniffingReflowTests(MainWindowResponsiveTestCase):
         self.assertEqual(port_row, 1)  # moved to its own row
 
     def test_setup_row_reflow_is_reversible(self) -> None:
+        # Same reasoning as test_setup_row_is_one_row_at_normal above: the
+        # "before" snapshot needs a genuine NORMAL baseline, not Lite's
+        # COMPACT-by-default construction size.
+        self.resize_and_settle(1400, 900)
         pp = self.window.passive_page
         grid = pp._settings_grid
         before = grid.getItemPosition(grid.indexOf(pp.port_combo))
@@ -311,21 +323,27 @@ class PassiveSniffingReflowTests(MainWindowResponsiveTestCase):
         after = grid.getItemPosition(grid.indexOf(pp.port_combo))
         self.assertEqual(before, after)
 
-    def test_double_click_tip_label_hidden_when_compact_and_restored_when_normal(
-        self,
-    ) -> None:
+    def test_inspect_button_stays_reachable_at_every_density(self) -> None:
+        """Lite drops the desktop build's persistent "Tip: double-click a
+        row..." label entirely (see passive_capture.py's inspect_btn
+        docstring) rather than reflowing it — inspect_btn is the always-
+        visible replacement, at both normal and compact density.
+        """
         pp = self.window.passive_page
-        self.assertFalse(pp._double_click_tip_label.isHidden())
+        self.assertFalse(pp.inspect_btn.isHidden())
 
         self.resize_and_settle(800, 480)
-        self.assertTrue(pp._double_click_tip_label.isHidden())
+        self.assertFalse(pp.inspect_btn.isHidden())
 
         self.resize_and_settle(1400, 900)
-        self.assertFalse(pp._double_click_tip_label.isHidden())
+        self.assertFalse(pp.inspect_btn.isHidden())
 
     def test_message_table_minimum_height_shrinks_when_compact_and_restores(
         self,
     ) -> None:
+        # Establish a genuine NORMAL baseline first — Lite's default
+        # construction size (800x480) is itself COMPACT.
+        self.resize_and_settle(1400, 900)
         pp = self.window.passive_page
         normal_floor = pp.message_table.minimumHeight()
 
@@ -338,6 +356,10 @@ class PassiveSniffingReflowTests(MainWindowResponsiveTestCase):
 
 class ProfileSidebarResponsiveTests(MainWindowResponsiveTestCase):
     def test_sidebar_auto_collapses_when_entering_compact(self) -> None:
+        # Establish NORMAL (sidebar visible) first — Lite's 800x480 default
+        # construction size is itself COMPACT, so the sidebar has already
+        # auto-collapsed by the time an unresized window is checked.
+        self.resize_and_settle(1400, 900)
         profile_tab = self.window.profile_tab
         self.assertTrue(profile_tab._sidebar_visible)
 
@@ -380,6 +402,9 @@ class PacketInspectorResponsiveTests(MainWindowResponsiveTestCase):
         self.assertEqual(policy.verticalPolicy(), QSizePolicy.Expanding)
 
     def test_byte_table_floor_shrinks_when_compact_and_restores(self) -> None:
+        # Establish a genuine NORMAL baseline first — Lite's default
+        # construction size (800x480) is itself COMPACT.
+        self.resize_and_settle(1400, 900)
         inspector = self.window.packet_inspector
         normal_floor = inspector.byte_table.minimumHeight()
 
