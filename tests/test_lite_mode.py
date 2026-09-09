@@ -163,20 +163,24 @@ class PassiveSniffingWidgetLiteModeTests(unittest.TestCase):
             widget.deleteLater()
             APP.processEvents()
 
-    def test_lite_edition_drops_search_and_tip_adds_inspect_button(self) -> None:
+    def test_lite_edition_drops_search_tip_and_direction_type_filters(self) -> None:
         widget = PassiveSniffingWidget(lite=True)
         try:
             self.assertFalse(hasattr(widget, "search"))
             self.assertFalse(hasattr(widget, "_double_click_tip_label"))
-            self.assertTrue(hasattr(widget, "inspect_btn"))
-            # Retained touch-friendly dropdown filters.
-            for attribute in (
-                "direction_filter",
-                "frame_type_filter",
-                "slave_filter",
-                "function_filter",
-            ):
-                self.assertTrue(hasattr(widget, attribute))
+            self.assertFalse(hasattr(widget, "inspect_btn"))
+            # Direction/Frame Type filtering and Reset Filters are gone —
+            # only Slave and Function remain.
+            self.assertFalse(hasattr(widget, "direction_filter"))
+            self.assertFalse(hasattr(widget, "frame_type_filter"))
+            self.assertFalse(hasattr(widget, "reset_filters_btn"))
+            self.assertTrue(hasattr(widget, "slave_filter"))
+            self.assertTrue(hasattr(widget, "function_filter"))
+            # No More▾ menu — Export CSV is a standalone button instead;
+            # Copy Selected (the menu's other action) is dropped entirely.
+            self.assertFalse(hasattr(widget, "more_btn"))
+            self.assertFalse(hasattr(widget, "copy_action"))
+            self.assertTrue(hasattr(widget, "export_csv_btn"))
         finally:
             widget.deleteLater()
             APP.processEvents()
@@ -189,6 +193,87 @@ class PassiveSniffingWidgetLiteModeTests(unittest.TestCase):
                 table.columnWidth(column) for column in range(table.columnCount())
             )
             self.assertGreater(total_width, 800)
+        finally:
+            widget.deleteLater()
+            APP.processEvents()
+
+    def test_lite_actions_row_puts_export_and_save_on_the_right_of_pause_clear(
+        self,
+    ) -> None:
+        widget = PassiveSniffingWidget(lite=True)
+        try:
+            grid = widget._actions_grid
+            pause_row, pause_col, _, _ = grid.getItemPosition(
+                grid.indexOf(widget.pause_btn)
+            )
+            clear_row, clear_col, _, _ = grid.getItemPosition(
+                grid.indexOf(widget.clear_btn)
+            )
+            export_row, export_col, _, _ = grid.getItemPosition(
+                grid.indexOf(widget.export_csv_btn)
+            )
+            save_row, save_col, _, _ = grid.getItemPosition(
+                grid.indexOf(widget.save_profile_btn)
+            )
+            info_row, info_col, _, _ = grid.getItemPosition(
+                grid.indexOf(widget.save_profile_info_icon)
+            )
+            # All one row.
+            self.assertEqual(
+                {pause_row, clear_row, export_row, save_row, info_row}, {0}
+            )
+            # Pause/Clear on the left, Export CSV/Save as Profile/info icon
+            # to the right of them, in that order.
+            self.assertLess(pause_col, clear_col)
+            self.assertLess(clear_col, export_col)
+            self.assertLess(export_col, save_col)
+            self.assertLess(save_col, info_col)
+        finally:
+            widget.deleteLater()
+            APP.processEvents()
+
+    def test_lite_slave_and_function_filters_still_work(self) -> None:
+        from plcsniffer.modbus import CapturedModbusFrame
+
+        widget = PassiveSniffingWidget(lite=True)
+        try:
+            frame_a = CapturedModbusFrame(
+                timestamp=1.0,
+                direction="Master → Slave",
+                slave_id=1,
+                function_code=3,
+                function_name="Read Holding Registers",
+                frame_type="Request",
+                address=0,
+                quantity=1,
+                values=(),
+                raw=b"\x01\x03\x00\x00\x00\x01\x84\x0a",
+                description="a",
+            )
+            frame_b = CapturedModbusFrame(
+                timestamp=2.0,
+                direction="Master → Slave",
+                slave_id=2,
+                function_code=4,
+                function_name="Read Input Registers",
+                frame_type="Request",
+                address=0,
+                quantity=1,
+                values=(),
+                raw=b"\x02\x04\x00\x00\x00\x01\x71\xca",
+                description="b",
+            )
+            widget._on_frame(frame_a)
+            widget._on_frame(frame_b)
+
+            widget.slave_filter.setCurrentIndex(widget.slave_filter.findData(1))
+            widget._apply_filter()
+            self.assertFalse(widget.message_table.isRowHidden(0))
+            self.assertTrue(widget.message_table.isRowHidden(1))
+
+            widget.reset_filters()
+            self.assertFalse(widget.message_table.isRowHidden(0))
+            self.assertFalse(widget.message_table.isRowHidden(1))
         finally:
             widget.deleteLater()
             APP.processEvents()

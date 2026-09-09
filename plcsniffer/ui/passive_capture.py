@@ -529,24 +529,28 @@ class PassiveSniffingWidget(QWidget):
             self._filter_timer.timeout.connect(self._apply_filter)
             self.search.textChanged.connect(self._schedule_filter)
 
-        self.direction_filter = QComboBox()
-        self.direction_filter.addItem("All directions", None)
-        self.direction_filter.addItem("Master → Slave", "Master → Slave")
-        self.direction_filter.addItem("Slave → Master", "Slave → Master")
-        self.direction_filter.addItem("Unknown", "Unknown")
-        self.direction_filter.currentIndexChanged.connect(self._apply_filter)
+        if not self._lite:
+            # Direction/Frame Type filtering and the Reset Filters button
+            # are full-edition only — Lite keeps just Slave and Function
+            # (see below), each reset individually via its own dropdown.
+            self.direction_filter = QComboBox()
+            self.direction_filter.addItem("All directions", None)
+            self.direction_filter.addItem("Master → Slave", "Master → Slave")
+            self.direction_filter.addItem("Slave → Master", "Slave → Master")
+            self.direction_filter.addItem("Unknown", "Unknown")
+            self.direction_filter.currentIndexChanged.connect(self._apply_filter)
 
-        self.frame_type_filter = QComboBox()
-        self.frame_type_filter.addItem("All frame types", None)
-        for frame_type in (
-            "Request",
-            "Response",
-            "Exception response",
-            "Unmatched frame",
-            "CRC Error",
-        ):
-            self.frame_type_filter.addItem(frame_type, frame_type)
-        self.frame_type_filter.currentIndexChanged.connect(self._apply_filter)
+            self.frame_type_filter = QComboBox()
+            self.frame_type_filter.addItem("All frame types", None)
+            for frame_type in (
+                "Request",
+                "Response",
+                "Exception response",
+                "Unmatched frame",
+                "CRC Error",
+            ):
+                self.frame_type_filter.addItem(frame_type, frame_type)
+            self.frame_type_filter.currentIndexChanged.connect(self._apply_filter)
 
         self.slave_filter = QComboBox()
         self.slave_filter.addItem("All slave IDs", None)
@@ -555,42 +559,35 @@ class PassiveSniffingWidget(QWidget):
         self.function_filter.addItem("All functions", None)
         self.function_filter.currentIndexChanged.connect(self._apply_filter)
 
-        # These four grow further items at runtime (e.g. "16 — Write
-        # Multiple Registers" once that function is captured), and a
-        # QComboBox's default size policy reserves enough width to show its
-        # single longest item without eliding — so left alone, whichever
-        # item happens to be longest silently forces this whole row (and the
+        # These grow further items at runtime (e.g. "16 — Write Multiple
+        # Registers" once that function is captured), and a QComboBox's
+        # default size policy reserves enough width to show its single
+        # longest item without eliding — so left alone, whichever item
+        # happens to be longest silently forces this whole row (and the
         # tab) wider. Sizing from a character count keeps a compact, steady
         # width instead; the dropdown list itself always shows full text.
-        for combo in (
-            self.direction_filter,
-            self.frame_type_filter,
-            self.slave_filter,
-            self.function_filter,
-        ):
+        combos = [self.slave_filter, self.function_filter]
+        if not self._lite:
+            combos = [self.direction_filter, self.frame_type_filter] + combos
+        for combo in combos:
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(14)
 
-        self.reset_filters_btn = QPushButton("Reset Filters")
-        self.reset_filters_btn.clicked.connect(self.reset_filters)
+        if not self._lite:
+            self.reset_filters_btn = QPushButton("Reset Filters")
+            self.reset_filters_btn.clicked.connect(self.reset_filters)
         self.filter_count_label = QLabel("Showing 0 of 0 packets")
         self.filter_count_label.setStyleSheet("color: #526174; font-weight: 600;")
 
         if self._lite:
-            # Compact two-row arrangement of touch-friendly dropdown
-            # filters — no group-box border/title around them (they're
-            # four small controls, not a form worth a whole card) — plus
-            # Reset and the count, all with no keyboard input required.
-            filters.addWidget(QLabel("Direction"), 0, 0)
-            filters.addWidget(self.direction_filter, 0, 1)
-            filters.addWidget(QLabel("Type"), 0, 2)
-            filters.addWidget(self.frame_type_filter, 0, 3)
-            filters.addWidget(self.reset_filters_btn, 0, 4)
-            filters.addWidget(QLabel("Slave"), 1, 0)
-            filters.addWidget(self.slave_filter, 1, 1)
-            filters.addWidget(QLabel("Function"), 1, 2)
-            filters.addWidget(self.function_filter, 1, 3)
-            filters.addWidget(self.filter_count_label, 1, 4)
+            # One row of touch-friendly dropdown filters — no group-box
+            # border/title around them (they're two small controls, not a
+            # form worth a whole card), no keyboard input required.
+            filters.addWidget(QLabel("Slave"), 0, 0)
+            filters.addWidget(self.slave_filter, 0, 1)
+            filters.addWidget(QLabel("Function"), 0, 2)
+            filters.addWidget(self.function_filter, 0, 3)
+            filters.addWidget(self.filter_count_label, 0, 4)
         else:
             # Two rows of three filters rather than one row of six — halves
             # the width this group needs on a small screen without hiding
@@ -620,27 +617,29 @@ class PassiveSniffingWidget(QWidget):
         self.clear_btn = QPushButton("Clear Packets")
         self.clear_btn.clicked.connect(self.clear_messages)
         if self._lite:
-            # Explicit touch access path to inspection, additional to (and
-            # behaviorally identical to) double-clicking a row — a
-            # touchscreen double-tap can be unreliable. Double-click keeps
-            # working unchanged.
-            self.inspect_btn = QPushButton("Inspect")
-            self.inspect_btn.clicked.connect(self.inspect_selected_row)
-        # Less-frequent actions tucked behind one menu button instead of
-        # sitting in the row at equal weight to Pause/Clear — same slots as
-        # before, just relocated.
-        self.more_btn = QToolButton()
-        self.more_btn.setText("More ▾")
-        self.more_btn.setPopupMode(QToolButton.InstantPopup)
-        more_menu = QMenu(self.more_btn)
-        more_menu.setToolTipsVisible(True)
-        self.copy_action = more_menu.addAction("Copy Selected")
-        self.copy_action.setToolTip("Copy the selected captured rows to the clipboard.")
-        self.copy_action.triggered.connect(self.copy_selected)
-        self.export_action = more_menu.addAction("Export CSV")
-        self.export_action.setToolTip("Export the captured packets to a CSV file.")
-        self.export_action.triggered.connect(self.export_csv_dialog)
-        self.more_btn.setMenu(more_menu)
+            # Lite has no More▾ menu (see below) — Export CSV is its own
+            # button instead; Copy Selected (the menu's other action) is
+            # dropped entirely rather than also becoming a standalone
+            # button.
+            self.export_csv_btn = QPushButton("Export CSV")
+            self.export_csv_btn.setToolTip("Export the captured packets to a CSV file.")
+            self.export_csv_btn.clicked.connect(self.export_csv_dialog)
+        else:
+            # Less-frequent actions tucked behind one menu button instead
+            # of sitting in the row at equal weight to Pause/Clear — same
+            # slots as before, just relocated.
+            self.more_btn = QToolButton()
+            self.more_btn.setText("More ▾")
+            self.more_btn.setPopupMode(QToolButton.InstantPopup)
+            more_menu = QMenu(self.more_btn)
+            more_menu.setToolTipsVisible(True)
+            self.copy_action = more_menu.addAction("Copy Selected")
+            self.copy_action.setToolTip("Copy the selected captured rows to the clipboard.")
+            self.copy_action.triggered.connect(self.copy_selected)
+            self.export_action = more_menu.addAction("Export CSV")
+            self.export_action.setToolTip("Export the captured packets to a CSV file.")
+            self.export_action.triggered.connect(self.export_csv_dialog)
+            self.more_btn.setMenu(more_menu)
         self.save_profile_btn = QPushButton("Save as Profile")
         self.save_profile_btn.setProperty("role", "primary")
         self.save_profile_btn.setToolTip(
@@ -680,14 +679,12 @@ class PassiveSniffingWidget(QWidget):
             # Touch targets: Lite's primary field-use actions get a
             # comfortable finger-sized minimum height. The persistent
             # "Tip: double-click a row..." label from the full edition is
-            # dropped entirely rather than reflowed — inspect_btn above is
-            # the discoverable, always-visible replacement for it
-            # (double-click itself still works too).
+            # dropped entirely with no on-screen replacement — double-click
+            # a row to inspect it, same as the full edition.
             for button in (
                 self.pause_btn,
                 self.clear_btn,
-                self.inspect_btn,
-                self.more_btn,
+                self.export_csv_btn,
                 self.save_profile_btn,
             ):
                 button.setMinimumHeight(44)
@@ -795,7 +792,7 @@ class PassiveSniffingWidget(QWidget):
             grid.addWidget(self.refresh_btn, 0, 4)
 
     def _reflow_actions_row(self, *, compact: bool) -> None:
-        """Arrange the Pause/Clear/(Inspect/)More/Save-as-Profile row for the density.
+        """Arrange the Pause/Clear/(More/)Save-as-Profile row for the density.
 
         Full edition — Normal: one row, all five controls plus the trailing
         hint label. Compact/Ultra-compact: two rows (Pause/Clear/More, then
@@ -805,27 +802,20 @@ class PassiveSniffingWidget(QWidget):
         the task's priority of collapsing secondary information before
         anything interactive.
 
-        Lite edition has no hint label to drop (see _build_ui) — inspect_btn
-        takes its place in the row instead, at every density.
+        Lite edition always stays one row regardless of density — only five
+        small controls (no More▾ menu, no hint label — see _build_ui),
+        comfortably narrower than an 800px screen at every tier: Pause/Clear
+        on the left, Export CSV/Save as Profile/info icon pushed to the
+        right of the same row by the stretch column between them.
         """
         grid = self._actions_grid
         if self._lite:
-            if compact:
-                grid.addWidget(self.pause_btn, 0, 0)
-                grid.addWidget(self.clear_btn, 0, 1)
-                grid.addWidget(self.inspect_btn, 0, 2)
-                grid.addWidget(self.more_btn, 1, 0)
-                grid.addWidget(self.save_profile_btn, 1, 1)
-                grid.addWidget(self.save_profile_info_icon, 1, 2)
-                grid.setColumnStretch(3, 1)
-            else:
-                grid.addWidget(self.pause_btn, 0, 0)
-                grid.addWidget(self.clear_btn, 0, 1)
-                grid.addWidget(self.inspect_btn, 0, 2)
-                grid.addWidget(self.more_btn, 0, 3)
-                grid.addWidget(self.save_profile_btn, 0, 4)
-                grid.addWidget(self.save_profile_info_icon, 0, 5)
-                grid.setColumnStretch(6, 1)
+            grid.addWidget(self.pause_btn, 0, 0)
+            grid.addWidget(self.clear_btn, 0, 1)
+            grid.addWidget(self.export_csv_btn, 0, 3)
+            grid.addWidget(self.save_profile_btn, 0, 4)
+            grid.addWidget(self.save_profile_info_icon, 0, 5)
+            grid.setColumnStretch(2, 1)
             return
 
         self._double_click_tip_label.setVisible(not compact)
@@ -1129,36 +1119,17 @@ class PassiveSniffingWidget(QWidget):
         if packet is not None:
             self.packet_inspection_requested.emit(packet)
 
-    def inspect_selected_row(self) -> None:
-        """Inspect the currently selected row (the Inspect button's handler).
-
-        Lite-only: same target (packet_inspection_requested) and behavior
-        as double-clicking a row (_inspect_row) — an additional access path
-        for a touchscreen where double-tap can be unreliable. Double-click
-        keeps working unchanged.
-        """
-        rows = sorted({index.row() for index in self.message_table.selectedIndexes()})
-        if not rows:
-            self._set_status_message("Select a captured row to inspect.", "warning")
-            return
-        self._inspect_row(rows[0], 0)
-
     def _filters_are_active(self) -> bool:
         has_query = not self._lite and bool(self.search.text().strip())
-        return has_query or any(
-            combo.currentData() is not None
-            for combo in (
-                self.direction_filter,
-                self.frame_type_filter,
-                self.slave_filter,
-                self.function_filter,
-            )
-        )
+        combos = (self.slave_filter, self.function_filter)
+        if not self._lite:
+            combos = (self.direction_filter, self.frame_type_filter) + combos
+        return has_query or any(combo.currentData() is not None for combo in combos)
 
     def _apply_filter(self, *_args) -> None:
         query = "" if self._lite else self.search.text().strip().lower()
-        direction = self.direction_filter.currentData()
-        frame_type = self.frame_type_filter.currentData()
+        direction = None if self._lite else self.direction_filter.currentData()
+        frame_type = None if self._lite else self.frame_type_filter.currentData()
         slave_id = self.slave_filter.currentData()
         function_code = self.function_filter.currentData()
         visible = 0
@@ -1187,21 +1158,20 @@ class PassiveSniffingWidget(QWidget):
 
         total = self.message_table.rowCount()
         self.filter_count_label.setText(f"Showing {visible} of {total} packets")
-        filters_active = any(
-            value is not None
-            for value in (direction, frame_type, slave_id, function_code)
-        ) or bool(query)
-        self.reset_filters_btn.setEnabled(filters_active)
+        if not self._lite:
+            filters_active = any(
+                value is not None
+                for value in (direction, frame_type, slave_id, function_code)
+            ) or bool(query)
+            self.reset_filters_btn.setEnabled(filters_active)
 
     def reset_filters(self) -> None:
         if not self._lite:
             self.search.clear()
-        for combo in (
-            self.direction_filter,
-            self.frame_type_filter,
-            self.slave_filter,
-            self.function_filter,
-        ):
+        combos = (self.slave_filter, self.function_filter)
+        if not self._lite:
+            combos = (self.direction_filter, self.frame_type_filter) + combos
+        for combo in combos:
             combo.setCurrentIndex(0)
         self._apply_filter()
 
