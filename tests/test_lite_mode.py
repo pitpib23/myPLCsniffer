@@ -409,14 +409,19 @@ class ProfileTabLiteModeTests(unittest.TestCase):
             tab.deleteLater()
             APP.processEvents()
 
-    def test_lite_edition_defaults_to_identity_and_value_columns_only(self) -> None:
-        """Lite defaults to Name/Slave ID/Register/Parsed Value/Unit/Status
-        visible — everything else (Function Code/Format/Byte Order/Raw Hex
-        Value/Multiplier/Description/Timestamp) is hidden, not removed, and
-        reachable via the "Show all columns" checkbox."""
+    def test_lite_edition_defaults_to_showing_every_column(self) -> None:
+        """Lite shows all 13 register_table columns by default ("Show all
+        columns" starts checked); unchecking switches to a denser identity
+        + value only view (Name/Slave ID/Register/Parsed Value/Unit/
+        Status) — either way nothing is ever removed, only hidden."""
         tab = self._make_tab(lite=True)
         try:
             self.assertEqual(tab.register_table.columnCount(), 13)
+            self.assertTrue(tab.show_all_columns_checkbox.isChecked())
+            for column in range(13):
+                self.assertFalse(tab.register_table.isColumnHidden(column))
+
+            tab.show_all_columns_checkbox.setChecked(False)
             visible = {
                 column
                 for column in range(13)
@@ -424,18 +429,9 @@ class ProfileTabLiteModeTests(unittest.TestCase):
             }
             self.assertEqual(visible, {0, 1, 5, 8, 9, 12})
 
-            self.assertFalse(tab.show_all_columns_checkbox.isChecked())
             tab.show_all_columns_checkbox.setChecked(True)
             for column in range(13):
                 self.assertFalse(tab.register_table.isColumnHidden(column))
-
-            tab.show_all_columns_checkbox.setChecked(False)
-            visible_again = {
-                column
-                for column in range(13)
-                if not tab.register_table.isColumnHidden(column)
-            }
-            self.assertEqual(visible_again, {0, 1, 5, 8, 9, 12})
         finally:
             tab.deleteLater()
             APP.processEvents()
@@ -569,7 +565,6 @@ class DragToScrollTests(unittest.TestCase):
                 window.profile_tab_widget.viewport(),
                 window.passive_page.message_table.viewport(),
                 window.packet_inspector.byte_table.viewport(),
-                window.profile_tab.register_table.viewport(),
                 window.profile_tab.profile_list.viewport(),
             ]
             for surface in surfaces:
@@ -577,6 +572,27 @@ class DragToScrollTests(unittest.TestCase):
                     QScroller.hasScroller(surface),
                     f"expected a QScroller grabbed on {surface!r}",
                 )
+        finally:
+            window.close()
+            window.deleteLater()
+            APP.processEvents()
+
+    def test_lite_profile_register_table_has_no_scroller_of_its_own(self) -> None:
+        """One scrollable layer, not two: register_table has no internal
+        scrollbars/QScroller — it's sized to its full content instead (see
+        ProfileTab._fit_register_table_to_content) so the outer
+        profile_tab_widget QScrollArea is the only thing that scrolls."""
+        with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
+            window = MainWindow(lite=True)
+        try:
+            from PySide6.QtCore import Qt
+
+            table = window.profile_tab.register_table
+            self.assertFalse(QScroller.hasScroller(table.viewport()))
+            self.assertEqual(table.horizontalScrollBarPolicy(), Qt.ScrollBarAlwaysOff)
+            self.assertEqual(table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOff)
+            self.assertEqual(table.minimumHeight(), table.maximumHeight())
+            self.assertEqual(table.minimumWidth(), table.maximumWidth())
         finally:
             window.close()
             window.deleteLater()

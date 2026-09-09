@@ -76,13 +76,11 @@ _DESCRIPTION_COLUMN = 10
 _TIMESTAMP_COLUMN = 11
 _STATUS_COLUMN = 12
 
-# Lite's default register_table view: identity + value only (Name, Slave
-# ID, Register, Parsed Value, Unit, Status) — everything else needed to
-# actually configure a register (Function Code, Format, Byte Order,
-# Multiplier) plus the lower-priority Raw Hex Value/Description/Timestamp
-# stay in the table (nothing is deleted, only hidden — see
-# _on_show_all_columns_toggled) and reachable via the "Show all columns"
-# checkbox next to the filters.
+# Lite shows every register_table column by default ("Show all columns"
+# starts checked — see _build_table); unchecking it switches to identity +
+# value only (Name, Slave ID, Register, Parsed Value, Unit, Status), for
+# whoever prefers a denser view. Either way nothing is ever deleted, only
+# hidden — see _on_show_all_columns_toggled.
 _LITE_HIDDEN_COLUMNS = (
     _FUNCTION_CODE_COLUMN,
     _FORMAT_COLUMN,
@@ -724,11 +722,11 @@ class ProfileTab(QWidget):
         row.addWidget(self.reset_filters_btn)
 
         if self._lite:
-            # Lite's register_table defaults to identity + value only
-            # (Name/Slave ID/Register/Parsed Value/Unit/Status — see
-            # _LITE_HIDDEN_COLUMNS); this is the escape hatch back to every
-            # column, e.g. to edit Function Code/Format/Byte Order/
-            # Multiplier when configuring a register.
+            # Lite's register_table shows every column by default (checked
+            # here — see _build_table, which sets the initial state once
+            # register_table itself exists); unchecking switches to a
+            # denser identity + value only view (Name/Slave ID/Register/
+            # Parsed Value/Unit/Status — see _LITE_HIDDEN_COLUMNS).
             self.show_all_columns_checkbox = QCheckBox("Show all columns")
             self.show_all_columns_checkbox.toggled.connect(
                 self._on_show_all_columns_toggled
@@ -826,32 +824,27 @@ class ProfileTab(QWidget):
         # adding them doesn't silently move the stretch to the new last
         # column and squeeze Description down to its default width.
         header = self.register_table.horizontalHeader()
-        header.setSectionResizeMode(10, QHeaderView.Stretch)
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.setWordWrap(False)
         if self._lite:
-            # Lite's table strategy is scroll-not-shrink: every column
-            # keeps its existing readable width (below) rather than being
-            # compressed to fit 800px — a finger swipe reaches whatever
-            # the default identity + value view (set below) doesn't
-            # already show. Both gesture types (see PassiveSniffingWidget's
-            # message_table for the full reasoning): TouchGesture for a
-            # real multi-touch panel, LeftMouseButtonGesture for a
-            # touchscreen reporting as a mouse instead — either way,
-            # dragging pans like a phone screen. A quick tap/click or
-            # double-click-to-edit still registers normally; QScroller
-            # only takes over once the drag exceeds its small movement
-            # threshold.
-            self.register_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.register_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.register_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-            self.register_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-            QScroller.grabGesture(
-                self.register_table.viewport(), QScroller.TouchGesture
-            )
-            QScroller.grabGesture(
-                self.register_table.viewport(), QScroller.LeftMouseButtonGesture
-            )
+            # One scrollable layer, not two: register_table gets NO
+            # scrollbars of its own — it's sized to its full content (every
+            # row, every visible column; see _fit_register_table_to_content)
+            # and the *outer* per-tab QScrollArea (MainWindow.
+            # _make_scrollable, which already grabs QScroller for drag-to-
+            # pan) is what reaches whatever doesn't fit the screen. A
+            # table-internal scrollbar/QScroller nested inside that outer
+            # one made dragging ambiguous and janky — this tab now has
+            # exactly one thing that scrolls. Description therefore also
+            # needs a real fixed width instead of Stretch (which would
+            # otherwise try to fill an ever-changing, essentially unbounded
+            # viewport).
+            header.setSectionResizeMode(10, QHeaderView.Interactive)
+            self.register_table.setColumnWidth(10, 180)
+            self.register_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.register_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        else:
+            header.setSectionResizeMode(10, QHeaderView.Stretch)
         self.register_table.setColumnWidth(0, 150)
         self.register_table.setColumnWidth(_SLAVE_ID_COLUMN, 70)  # fits 3-digit slave IDs
         self.register_table.setColumnWidth(_FUNCTION_CODE_COLUMN, 210)  # fits "0x03 Read Holding Registers"
@@ -886,11 +879,12 @@ class ProfileTab(QWidget):
         )
 
         if self._lite:
-            # Default to identity + value only; nothing is deleted, only
-            # hidden — see _on_show_all_columns_toggled and the "Show all
-            # columns" checkbox built by _build_register_controls_row
-            # (which runs before this method, so it already exists here).
-            self._on_show_all_columns_toggled(False)
+            # Default to showing every column — checking the box here
+            # (built by _build_register_controls_row, which runs before
+            # this method, so it already exists) fires
+            # _on_show_all_columns_toggled(True) and keeps the checkbox's
+            # own displayed state in sync with the table.
+            self.show_all_columns_checkbox.setChecked(True)
 
         parent_layout.addWidget(self.register_table, stretch=1)
 
@@ -1386,6 +1380,7 @@ class ProfileTab(QWidget):
         self._ignore_changes = False
         self._refresh_slave_filter_options(profile)
         self._apply_filter()
+        self._fit_register_table_to_content()
 
     def _insert_register_row(self, register: dict, slave: dict) -> None:
         row = self.register_table.rowCount()
@@ -1492,6 +1487,7 @@ class ProfileTab(QWidget):
         self._refresh_slave_filter_options(profile)
         self._apply_filter()
         self._update_profile_summary(profile)
+        self._fit_register_table_to_content()
 
     def remove_register(self) -> None:
         if not self._editing:
@@ -1520,6 +1516,7 @@ class ProfileTab(QWidget):
         self._refresh_slave_filter_options(profile)
         self._apply_filter()
         self._update_profile_summary(profile)
+        self._fit_register_table_to_content()
 
     def _on_cell_changed(self, row: int, column: int) -> None:
         if self._ignore_changes:
@@ -2341,6 +2338,36 @@ class ProfileTab(QWidget):
         """
         for column in _LITE_HIDDEN_COLUMNS:
             self.register_table.setColumnHidden(column, not checked)
+        self._fit_register_table_to_content()
+
+    def _fit_register_table_to_content(self) -> None:
+        """Lite only: size register_table to fit every row and every
+        currently-visible column exactly, with no scrollbars of its own.
+
+        One scrollable layer, not two: the *outer* per-tab QScrollArea
+        (MainWindow._make_scrollable) already grabs QScroller for drag-to-
+        pan — a table-internal scrollbar (plus its own QScroller) nested
+        inside that outer one made dragging ambiguous and janky on a
+        touchscreen. Called whenever row count or column visibility
+        changes (populate/add/remove register, the "Show all columns"
+        toggle) since either can change the content size this needs to
+        match.
+        """
+        if not self._lite:
+            return
+        table = self.register_table
+        height = table.horizontalHeader().height()
+        height += sum(table.rowHeight(row) for row in range(table.rowCount()))
+        height += table.frameWidth() * 2 + 2
+        table.setFixedHeight(max(height, 220))
+
+        width = sum(
+            table.columnWidth(column)
+            for column in range(table.columnCount())
+            if not table.isColumnHidden(column)
+        )
+        width += table.frameWidth() * 2 + 2
+        table.setFixedWidth(width)
 
     def add_profile_from_data(self, profile_dict: dict) -> None:
         """Add one already-built PLC profile (e.g. from a passive capture).
