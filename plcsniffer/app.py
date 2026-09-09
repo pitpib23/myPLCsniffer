@@ -29,11 +29,19 @@ def resource_path(relative_path: str | Path) -> Path:
 
 def create_main_window(
     arguments: Sequence[str] | None = None,
+    *,
+    lite: bool = False,
 ) -> tuple[QApplication, MainWindow]:
     """Create the Qt application and configured main window.
 
     Args:
-        arguments: Optional process-style command-line arguments.
+        arguments: Optional process-style command-line arguments, passed
+            straight through to QApplication. run() below is what strips
+            its own --lite flag out of these before they reach here — call
+            this function directly (e.g. from a test or REPL) with
+            whatever Qt-specific arguments you need, plus lite explicitly.
+        lite: True builds the Raspberry Pi 7" touchscreen edition
+            (MainWindow(lite=True)) instead of the full desktop edition.
 
     Returns:
         The QApplication and main-window pair.
@@ -51,13 +59,23 @@ def create_main_window(
     icon = QIcon(str(icon_path))
     application.setWindowIcon(icon)
 
-    window = MainWindow()
+    window = MainWindow(lite=lite)
     window.setWindowIcon(icon)
     return application, window
 
 
 def run(arguments: Sequence[str] | None = None) -> int:
-    """Launch the desktop application and return its process exit code."""
-    application, window = create_main_window(arguments)
+    """Launch the desktop application and return its process exit code.
+
+    Recognizes one flag of its own, ``--lite`` (e.g. ``python main.py
+    --lite``), which selects the Raspberry Pi 7" touchscreen edition
+    (MainWindow(lite=True)) instead of the full desktop edition — the
+    default with no flag. ``--lite`` is consumed here and never forwarded
+    to QApplication, which would not recognize it.
+    """
+    raw_arguments = list(arguments) if arguments is not None else sys.argv
+    lite = "--lite" in raw_arguments
+    qt_arguments = [value for value in raw_arguments if value != "--lite"]
+    application, window = create_main_window(qt_arguments, lite=lite)
     window.showMaximized()
     return application.exec()

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScroller,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
@@ -272,8 +273,9 @@ class RegisterAddressDelegate(QStyledItemDelegate):
 
 
 class ProfileTab(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, lite: bool = False) -> None:
         super().__init__(parent)
+        self._lite = lite
         # Same writable-location logic logging_config.py already uses for the
         # log file: project root during development, but a proper per-user
         # app-data directory (%LOCALAPPDATA%\myPLCsniffer, or ~/.myPLCsniffer
@@ -454,6 +456,9 @@ class ProfileTab(QWidget):
         self.remove_profile_btn = QPushButton("Remove")
         self.remove_profile_btn.setToolTip("Remove the selected profile")
         self.remove_profile_btn.clicked.connect(self.remove_profile)
+        if self._lite:
+            self.add_profile_btn.setMinimumHeight(44)
+            self.remove_profile_btn.setMinimumHeight(44)
         button_layout.addWidget(self.add_profile_btn)
         button_layout.addWidget(self.remove_profile_btn)
         left_layout.addLayout(button_layout)
@@ -531,6 +536,14 @@ class ProfileTab(QWidget):
         self.discard_changes_btn.clicked.connect(self.discard_changes)
         row.addWidget(self.discard_changes_btn)
 
+        if self._lite:
+            for button in (
+                self.edit_profile_btn,
+                self.save_profile_btn,
+                self.discard_changes_btn,
+            ):
+                button.setMinimumHeight(44)
+
         parent_layout.addLayout(row)
 
         self.edit_status_label = QLabel("Select a profile to view its details.")
@@ -604,10 +617,20 @@ class ProfileTab(QWidget):
         # group box plus a separate toolbar row — two fewer rows, and one
         # fewer group-box border, of vertical space spent before the table.
         row = QHBoxLayout()
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search registers...")
-        self.search_edit.textChanged.connect(self._apply_filter)
-        row.addWidget(self.search_edit, 3)
+        if self._lite:
+            # No free-text "Search registers..." field on Lite (same
+            # reasoning as Passive Sniffing's dropped search box —
+            # on-screen-keyboard interaction is poor for field use). The
+            # Slave/Function dropdowns below need no typing, so they're
+            # kept — see _apply_filter()/reset_filters(), which only
+            # reference self.search_edit when it actually exists (full
+            # edition).
+            pass
+        else:
+            self.search_edit = QLineEdit()
+            self.search_edit.setPlaceholderText("Search registers...")
+            self.search_edit.textChanged.connect(self._apply_filter)
+            row.addWidget(self.search_edit, 3)
 
         # One PLC profile may contain several Modbus slave IDs (see
         # passive_capture.PassiveSniffingWidget.current_profile_data) — all
@@ -653,6 +676,10 @@ class ProfileTab(QWidget):
         self.remove_register_btn.clicked.connect(self.remove_register)
         row.addWidget(self.remove_register_btn)
 
+        if self._lite:
+            self.add_register_btn.setMinimumHeight(44)
+            self.remove_register_btn.setMinimumHeight(44)
+
         parent_layout.addLayout(row)
 
     def _build_sniff_toolbar(self, parent_layout: QVBoxLayout) -> None:
@@ -681,8 +708,8 @@ class ProfileTab(QWidget):
         self.sniff_toggle_btn.setProperty("role", "primary")
         # Matches Tab 1's start_btn height exactly — same recurring action
         # (Start/Stop Passive Sniffing) gets the same visual weight on both
-        # tabs.
-        self.sniff_toggle_btn.setMinimumHeight(38)
+        # tabs, and both meet Lite's ~44px touch-target floor.
+        self.sniff_toggle_btn.setMinimumHeight(44 if self._lite else 38)
         self.sniff_toggle_btn.clicked.connect(self.toggle_sniffing)
         row.addWidget(self.sniff_toggle_btn)
         row.addStretch()
@@ -733,6 +760,20 @@ class ProfileTab(QWidget):
         header.setSectionResizeMode(10, QHeaderView.Stretch)
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.setWordWrap(False)
+        if self._lite:
+            # Lite's table strategy is scroll-not-shrink: all 13 columns
+            # keep their existing readable widths (below) rather than
+            # being hidden or compressed to fit 800px — a finger swipe
+            # reaches the rest. QScroller's TouchGesture only engages for
+            # actual touch input, so mouse-driven cell selection/editing
+            # during desktop development is unaffected.
+            self.register_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.register_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.register_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+            self.register_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+            QScroller.grabGesture(
+                self.register_table.viewport(), QScroller.TouchGesture
+            )
         self.register_table.setColumnWidth(0, 150)
         self.register_table.setColumnWidth(_SLAVE_ID_COLUMN, 70)  # fits 3-digit slave IDs
         self.register_table.setColumnWidth(_FUNCTION_CODE_COLUMN, 210)  # fits "0x03 Read Holding Registers"
@@ -2180,7 +2221,7 @@ class ProfileTab(QWidget):
         return self.sniff_capture_service.shutdown(timeout_ms)
 
     def _apply_filter(self, *_args) -> None:
-        query = self.search_edit.text().strip().lower()
+        query = "" if self._lite else self.search_edit.text().strip().lower()
         slave_id = self.slave_filter.currentData()
         function_code = self.function_code_filter.currentData()
 
@@ -2200,7 +2241,8 @@ class ProfileTab(QWidget):
             self.register_table.setRowHidden(row, not matches)
 
     def reset_filters(self) -> None:
-        self.search_edit.clear()
+        if not self._lite:
+            self.search_edit.clear()
         self.slave_filter.setCurrentIndex(0)
         self.function_code_filter.setCurrentIndex(0)
         self._apply_filter()
