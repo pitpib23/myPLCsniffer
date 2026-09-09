@@ -519,6 +519,14 @@ class ProfileTab(QWidget):
         self.profile_list.setMinimumWidth(210)
         self.profile_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.profile_list.setSpacing(2)
+        if self._lite:
+            self.profile_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+            QScroller.grabGesture(
+                self.profile_list.viewport(), QScroller.TouchGesture
+            )
+            QScroller.grabGesture(
+                self.profile_list.viewport(), QScroller.LeftMouseButtonGesture
+            )
         self.profile_list.setStyleSheet(
             """
             QListWidget {
@@ -826,15 +834,23 @@ class ProfileTab(QWidget):
             # keeps its existing readable width (below) rather than being
             # compressed to fit 800px — a finger swipe reaches whatever
             # the default identity + value view (set below) doesn't
-            # already show. QScroller's TouchGesture only engages for
-            # actual touch input, so mouse-driven cell selection/editing
-            # during desktop development is unaffected.
+            # already show. Both gesture types (see PassiveSniffingWidget's
+            # message_table for the full reasoning): TouchGesture for a
+            # real multi-touch panel, LeftMouseButtonGesture for a
+            # touchscreen reporting as a mouse instead — either way,
+            # dragging pans like a phone screen. A quick tap/click or
+            # double-click-to-edit still registers normally; QScroller
+            # only takes over once the drag exceeds its small movement
+            # threshold.
             self.register_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             self.register_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             self.register_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
             self.register_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
             QScroller.grabGesture(
                 self.register_table.viewport(), QScroller.TouchGesture
+            )
+            QScroller.grabGesture(
+                self.register_table.viewport(), QScroller.LeftMouseButtonGesture
             )
         self.register_table.setColumnWidth(0, 150)
         self.register_table.setColumnWidth(_SLAVE_ID_COLUMN, 70)  # fits 3-digit slave IDs

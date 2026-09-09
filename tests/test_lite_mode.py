@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScroller
 
 import plcsniffer.app as app_module
 from plcsniffer.capture import PassiveCaptureService
@@ -546,6 +546,62 @@ class ProfileSidebarToggleRegressionTests(unittest.TestCase):
 
             self.assertEqual(profile_tab.splitter.sizes(), original_sizes)
         finally:
+            window.close()
+            window.deleteLater()
+            APP.processEvents()
+
+
+class DragToScrollTests(unittest.TestCase):
+    """Lite must be draggable like a phone screen — both when the touch
+    panel reports genuine multi-touch (QScroller.TouchGesture) and when it
+    reports single-touch as plain mouse events instead
+    (QScroller.LeftMouseButtonGesture), which is common on Linux/X11
+    without a touch protocol registered. Full edition must never grab
+    either, so desktop mouse drag-to-select stays exactly as it was."""
+
+    def test_lite_grabs_both_gesture_types_on_every_scrollable_surface(self) -> None:
+        with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
+            window = MainWindow(lite=True)
+        try:
+            surfaces = [
+                window.passive_tab.viewport(),
+                window.packet_inspector_tab.viewport(),
+                window.profile_tab_widget.viewport(),
+                window.passive_page.message_table.viewport(),
+                window.packet_inspector.byte_table.viewport(),
+                window.profile_tab.register_table.viewport(),
+                window.profile_tab.profile_list.viewport(),
+            ]
+            for surface in surfaces:
+                self.assertTrue(
+                    QScroller.hasScroller(surface),
+                    f"expected a QScroller grabbed on {surface!r}",
+                )
+        finally:
+            window.close()
+            window.deleteLater()
+            APP.processEvents()
+
+    def test_full_edition_grabs_no_scrollers_anywhere(self) -> None:
+        with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
+            window = MainWindow(lite=False)
+        try:
+            surfaces = [
+                window.passive_tab.viewport(),
+                window.packet_inspector_tab.viewport(),
+                window.profile_tab_widget.viewport(),
+                window.passive_page.message_table.viewport(),
+                window.packet_inspector.byte_table.viewport(),
+                window.profile_tab.register_table.viewport(),
+                window.profile_tab.profile_list.viewport(),
+            ]
+            for surface in surfaces:
+                self.assertFalse(
+                    QScroller.hasScroller(surface),
+                    f"did not expect a QScroller grabbed on {surface!r}",
+                )
+        finally:
+            window.logging_page.stop_refresh()
             window.close()
             window.deleteLater()
             APP.processEvents()
