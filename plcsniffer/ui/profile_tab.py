@@ -9,6 +9,7 @@ import uuid
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -67,8 +68,30 @@ _FUNCTION_CODE_COLUMN = 2
 _FORMAT_COLUMN = 3
 _BYTE_ORDER_COLUMN = 4
 _REGISTER_COLUMN = 5
+_RAW_HEX_COLUMN = 6
+_MULTIPLIER_COLUMN = 7
+_PARSED_VALUE_COLUMN = 8
+_UNIT_COLUMN = 9
+_DESCRIPTION_COLUMN = 10
 _TIMESTAMP_COLUMN = 11
 _STATUS_COLUMN = 12
+
+# Lite's default register_table view: identity + value only (Name, Slave
+# ID, Register, Parsed Value, Unit, Status) — everything else needed to
+# actually configure a register (Function Code, Format, Byte Order,
+# Multiplier) plus the lower-priority Raw Hex Value/Description/Timestamp
+# stay in the table (nothing is deleted, only hidden — see
+# _on_show_all_columns_toggled) and reachable via the "Show all columns"
+# checkbox next to the filters.
+_LITE_HIDDEN_COLUMNS = (
+    _FUNCTION_CODE_COLUMN,
+    _FORMAT_COLUMN,
+    _BYTE_ORDER_COLUMN,
+    _RAW_HEX_COLUMN,
+    _MULTIPLIER_COLUMN,
+    _DESCRIPTION_COLUMN,
+    _TIMESTAMP_COLUMN,
+)
 
 # Format names/word counts, matching the vocabulary and register-count
 # convention used in vendor Modbus maps (e.g. Entes MPR-3/4 series: Address |
@@ -413,17 +436,43 @@ class ProfileTab(QWidget):
             self._sidebar_user_overridden = True
         if visible:
             self.left_panel.setVisible(True)
-            if self._nav_panel_sizes:
-                self.splitter.setSizes(self._nav_panel_sizes)
+            self.splitter.setSizes(self._restore_sizes())
             self.toggle_nav_btn.setText("« Hide Profiles")
             self.toggle_nav_btn.setToolTip(
                 "Hide the profile list to give the summary more room"
             )
         else:
-            self._nav_panel_sizes = self.splitter.sizes()
+            # Only remember sizes that actually reflect a laid-out splitter
+            # (both panes summing to something real) — capturing here
+            # while the window has never been shown (e.g. Lite's Sniff/
+            # Inspect/Profile tabs auto-collapsing this sidebar as part of
+            # MainWindow's very first, pre-show apply_responsive_mode()
+            # call) would otherwise store a degenerate [0, 0], and later
+            # replaying that via setSizes() lets the sidebar claim the
+            # entire splitter instead of restoring a real split.
+            sizes = self.splitter.sizes()
+            if sum(sizes) > 0:
+                self._nav_panel_sizes = sizes
             self.left_panel.setVisible(False)
             self.toggle_nav_btn.setText("» Show Profiles")
             self.toggle_nav_btn.setToolTip("Show the profile list")
+
+    def _restore_sizes(self) -> list[int]:
+        """The splitter sizes to apply when the sidebar becomes visible again.
+
+        Prefers the last real (non-degenerate) split captured by
+        _set_sidebar_visible(); falls back to the splitter's own configured
+        1:3 stretch ratio (see _build_ui) over whatever total width is
+        currently available, so showing the sidebar for the first time (or
+        after a bad capture) never hands it 100% of the splitter's width.
+        """
+        if self._nav_panel_sizes and sum(self._nav_panel_sizes) > 0:
+            return self._nav_panel_sizes
+        total = sum(self.splitter.sizes()) or self.splitter.width()
+        if total <= 0:
+            total = 800
+        left = max(self.left_panel.minimumWidth(), total // 4)
+        return [left, max(total - left, 0)]
 
     def _build_left_panel(self) -> None:
         # Styled as a distinct nav sidebar (white card, right border, accented
@@ -666,6 +715,18 @@ class ProfileTab(QWidget):
         self.reset_filters_btn.clicked.connect(self.reset_filters)
         row.addWidget(self.reset_filters_btn)
 
+        if self._lite:
+            # Lite's register_table defaults to identity + value only
+            # (Name/Slave ID/Register/Parsed Value/Unit/Status — see
+            # _LITE_HIDDEN_COLUMNS); this is the escape hatch back to every
+            # column, e.g. to edit Function Code/Format/Byte Order/
+            # Multiplier when configuring a register.
+            self.show_all_columns_checkbox = QCheckBox("Show all columns")
+            self.show_all_columns_checkbox.toggled.connect(
+                self._on_show_all_columns_toggled
+            )
+            row.addWidget(self.show_all_columns_checkbox)
+
         row.addSpacing(16)
 
         self.add_register_btn = QPushButton("Add Register")
@@ -761,10 +822,11 @@ class ProfileTab(QWidget):
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.setWordWrap(False)
         if self._lite:
-            # Lite's table strategy is scroll-not-shrink: all 13 columns
-            # keep their existing readable widths (below) rather than
-            # being hidden or compressed to fit 800px — a finger swipe
-            # reaches the rest. QScroller's TouchGesture only engages for
+            # Lite's table strategy is scroll-not-shrink: every column
+            # keeps its existing readable width (below) rather than being
+            # compressed to fit 800px — a finger swipe reaches whatever
+            # the default identity + value view (set below) doesn't
+            # already show. QScroller's TouchGesture only engages for
             # actual touch input, so mouse-driven cell selection/editing
             # during desktop development is unaffected.
             self.register_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -806,6 +868,13 @@ class ProfileTab(QWidget):
         self.register_table.setItemDelegateForColumn(
             _REGISTER_COLUMN, self.register_address_delegate
         )
+
+        if self._lite:
+            # Default to identity + value only; nothing is deleted, only
+            # hidden — see _on_show_all_columns_toggled and the "Show all
+            # columns" checkbox built by _build_register_controls_row
+            # (which runs before this method, so it already exists here).
+            self._on_show_all_columns_toggled(False)
 
         parent_layout.addWidget(self.register_table, stretch=1)
 
@@ -2246,6 +2315,16 @@ class ProfileTab(QWidget):
         self.slave_filter.setCurrentIndex(0)
         self.function_code_filter.setCurrentIndex(0)
         self._apply_filter()
+
+    def _on_show_all_columns_toggled(self, checked: bool) -> None:
+        """Lite only: reveal/re-hide the non-identity/value register columns.
+
+        Purely a view toggle — every column's underlying data (register
+        dict fields) is untouched either way; this only ever calls
+        setColumnHidden(), never removes a column or its items.
+        """
+        for column in _LITE_HIDDEN_COLUMNS:
+            self.register_table.setColumnHidden(column, not checked)
 
     def add_profile_from_data(self, profile_dict: dict) -> None:
         """Add one already-built PLC profile (e.g. from a passive capture).

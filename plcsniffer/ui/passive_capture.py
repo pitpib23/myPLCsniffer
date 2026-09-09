@@ -744,7 +744,10 @@ class PassiveSniffingWidget(QWidget):
             # width happens to be left over. setStretchLastSection still
             # lets it grow to fill genuine extra width on a wide window,
             # it just never shrinks below the floor set here.
-            for column, width in enumerate((105, 135, 65, 220, 125, 100, 70, 260)):
+            # Function is narrower here (70px) than the full edition's
+            # 220px — it shows just the numeric code (e.g. "03"), not the
+            # full "03 - Read Holding Registers" text (see _append_frame).
+            for column, width in enumerate((105, 135, 65, 70, 125, 100, 70, 260)):
                 self.message_table.setColumnWidth(column, width)
             header.setStretchLastSection(True)
             self.message_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -757,6 +760,14 @@ class PassiveSniffingWidget(QWidget):
             QScroller.grabGesture(
                 self.message_table.viewport(), QScroller.TouchGesture
             )
+            # Hidden, not deleted: the underlying frame data (and every
+            # column's own item) is unaffected — Direction/Count just
+            # don't consume screen space in Lite's default view. Frame
+            # Type already conveys most of what Direction would (Request
+            # vs Response), and Count is inferable from Start Address plus
+            # the Raw RTU Frame bytes.
+            self.message_table.setColumnHidden(1, True)  # Direction
+            self.message_table.setColumnHidden(6, True)  # Count
         else:
             header.setSectionResizeMode(7, QHeaderView.Stretch)
             for column, width in enumerate((105, 135, 65, 220, 125, 100, 70)):
@@ -1069,11 +1080,19 @@ class PassiveSniffingWidget(QWidget):
         self.last_frame = frame
         row = self.message_table.rowCount()
         self.message_table.insertRow(row)
+        # Lite shows just the numeric function code in this column (it's
+        # narrower there — see _build_ui) rather than the full "03 - Read
+        # Holding Registers" text; the full name is still one hover away
+        # via this cell's own tooltip, appended to the row's usual
+        # description tooltip below.
+        function_value = (
+            f"{frame.function_code:02d}" if self._lite else frame.function_text
+        )
         values = (
             frame.timestamp_text,
             frame.direction,
             str(frame.slave_id),
-            frame.function_text,
+            function_value,
             frame.frame_type,
             "—" if frame.address is None else str(frame.address),
             "—" if frame.quantity is None else str(frame.quantity),
@@ -1085,6 +1104,10 @@ class PassiveSniffingWidget(QWidget):
             if column == 0:
                 item.setData(Qt.UserRole, frame)
             self.message_table.setItem(row, column, item)
+        if self._lite:
+            self.message_table.item(row, 3).setToolTip(
+                f"{frame.function_text}\n{frame.description}"
+            )
 
         if self.slave_filter.findData(frame.slave_id) < 0:
             self.slave_filter.addItem(f"Slave {frame.slave_id}", frame.slave_id)

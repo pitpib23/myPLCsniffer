@@ -25,7 +25,7 @@ from plcsniffer.logging_config import log_event
 from plcsniffer.ui.main_window import MainWindow
 from plcsniffer.ui.packet_inspector import PacketInspectorWidget
 from plcsniffer.ui.passive_capture import PassiveSniffingWidget
-from plcsniffer.ui.profile_tab import ProfileTab
+from plcsniffer.ui.profile_tab import _FORMAT_COLUMN, ProfileTab
 
 APP = QApplication.instance() or QApplication([])
 
@@ -185,14 +185,85 @@ class PassiveSniffingWidgetLiteModeTests(unittest.TestCase):
             widget.deleteLater()
             APP.processEvents()
 
-    def test_lite_table_columns_scroll_rather_than_shrink(self) -> None:
+    def test_lite_table_visible_columns_are_not_squeezed(self) -> None:
         widget = PassiveSniffingWidget(lite=True)
         try:
             table = widget.message_table
-            total_width = sum(
-                table.columnWidth(column) for column in range(table.columnCount())
+            visible_width = sum(
+                table.columnWidth(column)
+                for column in range(table.columnCount())
+                if not table.isColumnHidden(column)
             )
-            self.assertGreater(total_width, 800)
+            # Whatever remains visible still keeps its full, readable width
+            # (not compressed to fit) — horizontal scroll (still enabled;
+            # see _build_ui) is what reaches anything beyond it.
+            self.assertGreaterEqual(visible_width, 725)
+        finally:
+            widget.deleteLater()
+            APP.processEvents()
+
+    def test_lite_hides_direction_and_count_keeps_the_rest(self) -> None:
+        widget = PassiveSniffingWidget(lite=True)
+        try:
+            table = widget.message_table
+            hidden = {column for column in range(8) if table.isColumnHidden(column)}
+            self.assertEqual(hidden, {1, 6})  # Direction, Count
+        finally:
+            widget.deleteLater()
+            APP.processEvents()
+
+    def test_lite_function_column_shows_only_the_code(self) -> None:
+        from plcsniffer.modbus import CapturedModbusFrame
+
+        widget = PassiveSniffingWidget(lite=True)
+        try:
+            frame = CapturedModbusFrame(
+                timestamp=1.0,
+                direction="Master → Slave",
+                slave_id=1,
+                function_code=3,
+                function_name="Read Holding Registers",
+                frame_type="Request",
+                address=0,
+                quantity=1,
+                values=(),
+                raw=b"\x01\x03\x00\x00\x00\x01\x84\x0a",
+                description="a",
+            )
+            widget._on_frame(frame)
+            self.assertEqual(widget.message_table.item(0, 3).text(), "03")
+            self.assertIn(
+                "Read Holding Registers", widget.message_table.item(0, 3).toolTip()
+            )
+        finally:
+            widget.deleteLater()
+            APP.processEvents()
+
+    def test_full_edition_still_shows_direction_count_and_full_function_name(
+        self,
+    ) -> None:
+        from plcsniffer.modbus import CapturedModbusFrame
+
+        widget = PassiveSniffingWidget(lite=False)
+        try:
+            table = widget.message_table
+            for column in range(table.columnCount()):
+                self.assertFalse(table.isColumnHidden(column))
+            frame = CapturedModbusFrame(
+                timestamp=1.0,
+                direction="Master → Slave",
+                slave_id=1,
+                function_code=3,
+                function_name="Read Holding Registers",
+                frame_type="Request",
+                address=0,
+                quantity=1,
+                values=(),
+                raw=b"\x01\x03\x00\x00\x00\x01\x84\x0a",
+                description="a",
+            )
+            widget._on_frame(frame)
+            self.assertEqual(table.item(0, 3).text(), "03 - Read Holding Registers")
         finally:
             widget.deleteLater()
             APP.processEvents()
@@ -338,14 +409,145 @@ class ProfileTabLiteModeTests(unittest.TestCase):
             tab.deleteLater()
             APP.processEvents()
 
-    def test_lite_edition_keeps_all_13_register_columns(self) -> None:
+    def test_lite_edition_defaults_to_identity_and_value_columns_only(self) -> None:
+        """Lite defaults to Name/Slave ID/Register/Parsed Value/Unit/Status
+        visible — everything else (Function Code/Format/Byte Order/Raw Hex
+        Value/Multiplier/Description/Timestamp) is hidden, not removed, and
+        reachable via the "Show all columns" checkbox."""
         tab = self._make_tab(lite=True)
+        try:
+            self.assertEqual(tab.register_table.columnCount(), 13)
+            visible = {
+                column
+                for column in range(13)
+                if not tab.register_table.isColumnHidden(column)
+            }
+            self.assertEqual(visible, {0, 1, 5, 8, 9, 12})
+
+            self.assertFalse(tab.show_all_columns_checkbox.isChecked())
+            tab.show_all_columns_checkbox.setChecked(True)
+            for column in range(13):
+                self.assertFalse(tab.register_table.isColumnHidden(column))
+
+            tab.show_all_columns_checkbox.setChecked(False)
+            visible_again = {
+                column
+                for column in range(13)
+                if not tab.register_table.isColumnHidden(column)
+            }
+            self.assertEqual(visible_again, {0, 1, 5, 8, 9, 12})
+        finally:
+            tab.deleteLater()
+            APP.processEvents()
+
+    def test_full_edition_shows_all_13_register_columns_with_no_toggle(self) -> None:
+        tab = self._make_tab(lite=False)
         try:
             self.assertEqual(tab.register_table.columnCount(), 13)
             for column in range(13):
                 self.assertFalse(tab.register_table.isColumnHidden(column))
+            self.assertFalse(hasattr(tab, "show_all_columns_checkbox"))
         finally:
             tab.deleteLater()
+            APP.processEvents()
+
+    def test_hiding_a_column_never_touches_its_underlying_register_data(self) -> None:
+        """Hidden columns are a view-only change — editing/decoding still
+        works on data in columns the user currently can't see, exactly the
+        way it already works while scrolled off-screen."""
+        tab = self._make_tab(lite=True)
+        try:
+            tab.add_profile()  # enters edit mode on a fresh profile
+            tab.add_register()
+            profile = tab._current_profile()
+            register = profile["slaves"][0]["registers"][0]
+            self.assertEqual(register["data_type"], "uint16")
+            self.assertEqual(register["byte_order"], "big_endian")
+            self.assertEqual(register["multiplier"], 1.0)
+            # Format (hidden by default) still holds the real stored value.
+            format_item = tab.register_table.item(0, _FORMAT_COLUMN)
+            self.assertEqual(format_item.text(), "16-bit Unsigned")
+        finally:
+            tab.deleteLater()
+            APP.processEvents()
+
+
+class ProfileSidebarToggleRegressionTests(unittest.TestCase):
+    """Regression guard: expanding the sidebar must never claim 100% of the
+    splitter's width.
+
+    Lite's Sniff/Inspect/Profile tabs auto-collapse this sidebar as part of
+    MainWindow's very first apply_responsive_mode() call, which runs before
+    the window is ever shown — the splitter isn't laid out yet, so its
+    sizes() at that point is degenerate ([0, 0]). Recording that as the
+    "restore to this" split and later replaying it via setSizes() handed
+    the sidebar the entire splitter and squeezed the register table/summary
+    to zero width the first time a user reopened it.
+    """
+
+    def _open_profile_tab(self, *, lite: bool):
+        with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
+            window = MainWindow(lite=lite)
+        window.show()
+        APP.processEvents()
+        window.tabs.setCurrentWidget(window.profile_tab_widget)
+        APP.processEvents()
+        return window
+
+    def test_lite_reopening_the_sidebar_leaves_the_register_table_usable(self) -> None:
+        window = self._open_profile_tab(lite=True)
+        try:
+            profile_tab = window.profile_tab
+            # Lite starts with the sidebar auto-collapsed (COMPACT at
+            # 800x480) — reopening it must give the right panel a real,
+            # usable share of the width, not zero.
+            self.assertFalse(profile_tab._sidebar_visible)
+            profile_tab.toggle_nav_btn.click()
+            APP.processEvents()
+            self.assertTrue(profile_tab._sidebar_visible)
+            self.assertGreater(profile_tab.right_panel.width(), 300)
+            self.assertGreater(profile_tab.left_panel.width(), 0)
+        finally:
+            window.close()
+            window.deleteLater()
+            APP.processEvents()
+
+    def test_lite_sidebar_survives_repeated_toggling(self) -> None:
+        window = self._open_profile_tab(lite=True)
+        try:
+            profile_tab = window.profile_tab
+            for _ in range(4):
+                profile_tab.toggle_nav_btn.click()
+                APP.processEvents()
+                if profile_tab._sidebar_visible:
+                    self.assertGreater(profile_tab.right_panel.width(), 300)
+                else:
+                    self.assertEqual(profile_tab.left_panel.width(), 0)
+        finally:
+            window.close()
+            window.deleteLater()
+            APP.processEvents()
+
+    def test_full_edition_toggle_still_restores_its_real_captured_sizes(self) -> None:
+        """Regression guard for the full edition's existing behavior, which
+        already worked correctly (the sidebar starts visible at the full
+        edition's 1400x900 default, so a real split is always captured
+        before the first hide) — must not be disturbed by the Lite fix."""
+        window = self._open_profile_tab(lite=False)
+        try:
+            profile_tab = window.profile_tab
+            self.assertTrue(profile_tab._sidebar_visible)
+            original_sizes = profile_tab.splitter.sizes()
+
+            profile_tab.toggle_nav_btn.click()  # hide
+            APP.processEvents()
+            profile_tab.toggle_nav_btn.click()  # show again
+            APP.processEvents()
+
+            self.assertEqual(profile_tab.splitter.sizes(), original_sizes)
+        finally:
+            window.close()
+            window.deleteLater()
             APP.processEvents()
 
 
