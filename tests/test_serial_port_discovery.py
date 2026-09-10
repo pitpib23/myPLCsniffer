@@ -45,20 +45,6 @@ class OnboardSerialPortsTests(unittest.TestCase):
             ports = _onboard_serial_ports()
 
         self.assertEqual([port.device for port in ports], ["/dev/ttyAMA0"])
-
-    def test_reports_a_ttyamc_hat_pyserial_never_globs_for_at_all(self) -> None:
-        """Field-confirmed on real hardware: a HAT that enumerates as
-        /dev/ttyAMC0 rather than /dev/ttyAMA0 — a name pyserial's own
-        comports() glob list never looks for, filter or no filter."""
-        with patch(
-            "plcsniffer.capture.glob.glob",
-            side_effect=_fake_glob({"/dev/ttyAMC*": ["/dev/ttyAMC0"]}),
-        ), patch(
-            "plcsniffer.capture.os.path.realpath", side_effect=lambda p: p
-        ):
-            ports = _onboard_serial_ports()
-
-        self.assertEqual([port.device for port in ports], ["/dev/ttyAMC0"])
         self.assertEqual(ports[0].description, "Onboard/GPIO UART")
 
     def test_prefers_the_stable_serial0_alias_over_the_raw_device_name(self) -> None:

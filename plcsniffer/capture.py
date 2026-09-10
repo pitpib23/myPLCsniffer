@@ -37,58 +37,36 @@ from plcsniffer.validation import (
 
 # Onboard/GPIO UART device paths (e.g. a receive-only RS-485 HAT wired
 # straight to a Raspberry Pi's GPIO header rather than through USB).
-#
-# /dev/ttyAMA* is the one pyserial's own Linux comports() scanner does
-# glob for, but it then drops any of them whose sysfs "subsystem"
-# resolves to "platform" (see serial.tools.list_ports_linux.comports/
-# SysFS) — which is exactly how the Pi's built-in PL011 UART is
-# registered, so it never appears there even when it's genuinely wired up
-# and working.
-#
-# /dev/ttyAMC* is a different gap: pyserial's device-name glob list
-# (ttyS*/ttyUSB*/ttyXRUSB*/ttyACM*/ttyAMA*/rfcomm*/ttyAP*) never looks for
-# it at all, filter or no filter — confirmed against pyserial's own
-# comports() source. Added after field-testing an actual HAT that enumerates
-# as /dev/ttyAMC0 rather than /dev/ttyAMA0.
-#
-# USB-serial HATs (ttyACM*/ttyUSB*) aren't affected by either gap — they're
-# on the "usb"/"usb-serial" subsystem and pyserial already globs for them,
-# so they show up fine without any of this.
+# pyserial's own Linux comports() scanner globs these same /dev/ttyAMA*
+# paths but then drops any of them whose sysfs "subsystem" resolves to
+# "platform" (see serial.tools.list_ports_linux.comports/SysFS) — which is
+# exactly how the Pi's PL011 UART is registered, so it never appears there
+# even when it's genuinely wired up and working. USB-serial HATs
+# (ttyACM*/ttyUSB*) aren't affected by this — they're on the "usb"/
+# "usb-serial" subsystem and already show up fine.
 #
 # Deliberately narrower than pyserial's own device list: plain
 # /dev/ttyS0-ttyS31 is excluded on purpose. On most desktop/laptop Linux
 # systems those legacy ISA-UART-compat nodes exist whether or not real
 # hardware is attached — the exact "phantom port" case pyserial's filter
 # is protecting against elsewhere — so blindly re-adding them would flood
-# the full desktop edition's port list with unusable entries. ttyAMA*/
-# ttyAMC* don't have that failure mode: both are SoC/HAT-specific UART
-# drivers that only ever create a device node for hardware that's
-# actually present/enabled.
+# the full desktop edition's port list with unusable entries.
 # /dev/serial0 and /dev/serial1 are Raspberry Pi OS's own stable aliases
 # for "whichever UART is actually wired to the header" (this differs by
 # Pi model — some route it to ttyAMA0, others to the ttyS0 mini-UART when
 # Bluetooth claims ttyAMA0); they only exist when that UART is enabled in
 # config.txt, so they're just as trustworthy as a real device node.
-_ONBOARD_SERIAL_GLOBS = (
-    "/dev/serial0",
-    "/dev/serial1",
-    "/dev/ttyAMA*",
-    "/dev/ttyAMC*",
-)
+_ONBOARD_SERIAL_GLOBS = ("/dev/serial0", "/dev/serial1", "/dev/ttyAMA*")
 
 
 def _onboard_serial_ports() -> list[ListPortInfo]:
-    """Onboard/GPIO UARTs pyserial's own comports() never reports.
+    """Onboard/GPIO UARTs that pyserial's own comports() filters out.
 
-    Two different gaps, one fix: ttyAMA* is filtered out by pyserial after
-    being found (see _ONBOARD_SERIAL_GLOBS above); ttyAMC* (and any future
-    HAT-specific name added there) isn't even in pyserial's own device-name
-    glob list, filter or no filter. Only ever reports a device that
-    genuinely exists in /dev — nothing is invented — so this is exactly as
-    conservative as pyserial's own approach, just reaching a couple of
-    device names/cases it doesn't. A no-op wherever none of these paths
-    exist (any non-Linux platform, or a Linux system with no onboard UART
-    enabled).
+    Only ever reports a device that genuinely exists in /dev — nothing is
+    invented — so this is exactly as conservative as pyserial's own
+    approach, just without the one filter that specifically hides this
+    Raspberry Pi case. A no-op wherever none of these paths exist (any
+    non-Linux platform, or a Linux system with no onboard UART enabled).
     """
     ports: list[ListPortInfo] = []
     seen_real_paths: set[str] = set()
