@@ -1,0 +1,4 @@
+# PyInstaller build output
+build/
+dist/
+*.spec
