@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import glob
 import logging
+import os
 from enum import Enum
 from typing import Any
 
@@ -33,10 +35,75 @@ from plcsniffer.validation import (
     validate_stopbits,
 )
 
+# Onboard/GPIO UART device paths (e.g. a receive-only RS-485 HAT wired
+# straight to a Raspberry Pi's GPIO header rather than through USB).
+# pyserial's own Linux comports() scanner globs these same /dev/ttyAMA*
+# paths but then drops any of them whose sysfs "subsystem" resolves to
+# "platform" (see serial.tools.list_ports_linux.comports/SysFS) — which is
+# exactly how the Pi's PL011 UART is registered, so it never appears there
+# even when it's genuinely wired up and working. USB-serial HATs
+# (ttyACM*/ttyUSB*) aren't affected by this — they're on the "usb"/
+# "usb-serial" subsystem and already show up fine.
+#
+# Deliberately narrower than pyserial's own device list: plain
+# /dev/ttyS0-ttyS31 is excluded on purpose. On most desktop/laptop Linux
+# systems those legacy ISA-UART-compat nodes exist whether or not real
+# hardware is attached — the exact "phantom port" case pyserial's filter
+# is protecting against elsewhere — so blindly re-adding them would flood
+# the full desktop edition's port list with unusable entries.
+# /dev/serial0 and /dev/serial1 are Raspberry Pi OS's own stable aliases
+# for "whichever UART is actually wired to the header" (this differs by
+# Pi model — some route it to ttyAMA0, others to the ttyS0 mini-UART when
+# Bluetooth claims ttyAMA0); they only exist when that UART is enabled in
+# config.txt, so they're just as trustworthy as a real device node.
+_ONBOARD_SERIAL_GLOBS = ("/dev/serial0", "/dev/serial1", "/dev/ttyAMA*")
+
+
+def _onboard_serial_ports() -> list[ListPortInfo]:
+    """Onboard/GPIO UARTs that pyserial's own comports() filters out.
+
+    Only ever reports a device that genuinely exists in /dev — nothing is
+    invented — so this is exactly as conservative as pyserial's own
+    approach, just without the one filter that specifically hides this
+    Raspberry Pi case. A no-op wherever none of these paths exist (any
+    non-Linux platform, or a Linux system with no onboard UART enabled).
+    """
+    ports: list[ListPortInfo] = []
+    seen_real_paths: set[str] = set()
+    for pattern in _ONBOARD_SERIAL_GLOBS:
+        for device in sorted(glob.glob(pattern)):
+            try:
+                real_path = os.path.realpath(device)
+            except OSError:
+                continue
+            if real_path in seen_real_paths:
+                continue
+            seen_real_paths.add(real_path)
+            port_info = ListPortInfo(device)
+            port_info.description = "Onboard/GPIO UART"
+            ports.append(port_info)
+    return ports
+
 
 def list_serial_ports() -> list[ListPortInfo]:
-    """Return serial ports currently visible to PySerial."""
-    return list(list_ports.comports())
+    """Return serial ports currently visible to PySerial.
+
+    Supplements pyserial's own list with onboard/GPIO UARTs it filters out
+    (see _onboard_serial_ports()), deduplicated against whatever pyserial
+    already reported by each device's resolved real path — so a port
+    already found (under any name/symlink) is never listed twice.
+    """
+    ports = list(list_ports.comports())
+    known_real_paths: set[str] = set()
+    for port in ports:
+        try:
+            known_real_paths.add(os.path.realpath(port.device))
+        except OSError:
+            pass
+    for onboard_port in _onboard_serial_ports():
+        if os.path.realpath(onboard_port.device) not in known_real_paths:
+            ports.append(onboard_port)
+    return ports
 
 
 class CaptureMode(str, Enum):
