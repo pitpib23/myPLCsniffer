@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScroller,
     QSpinBox,
@@ -40,7 +42,7 @@ from plcsniffer.config import (
     SerialSettings,
 )
 from plcsniffer.exceptions import ConfigurationError
-from plcsniffer.modbus import CapturedModbusFrame, REGISTER_TYPE_NOUNS
+from plcsniffer.modbus import CapturedModbusFrame, ModbusRTUDecoder, REGISTER_TYPE_NOUNS
 from plcsniffer.capture import PassiveCaptureService
 from plcsniffer.ui.responsive import METRICS, ResponsiveMode, apply_layout_spacing
 from plcsniffer.ui.style import STATUS_STYLES
@@ -639,6 +641,13 @@ class PassiveSniffingWidget(QWidget):
             self.export_action = more_menu.addAction("Export CSV")
             self.export_action.setToolTip("Export the captured packets to a CSV file.")
             self.export_action.triggered.connect(self.export_csv_dialog)
+            self.playback_action = more_menu.addAction("Playback CSV")
+            self.playback_action.setToolTip(
+                "Replay a previously exported CSV capture through the decoder — "
+                "e.g. to tune a Profile's Format/Byte Order against real field "
+                "data without being connected to the device."
+            )
+            self.playback_action.triggered.connect(self.import_csv_dialog)
             self.more_btn.setMenu(more_menu)
         self.save_profile_btn = QPushButton("Save as Profile")
         self.save_profile_btn.setProperty("role", "primary")
@@ -1265,6 +1274,164 @@ class PassiveSniffingWidget(QWidget):
         self._set_status_message(
             f"Exported {self.message_table.rowCount()} frames to {path}.", "saved"
         )
+
+    def import_csv_dialog(self) -> None:
+        if self.message_table.rowCount() > 0:
+            reply = QMessageBox.question(
+                self,
+                "Clear captured packets?",
+                "Playing back a CSV clears the packets currently shown here. "
+                "Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Playback Passive Modbus Capture", "", "CSV (*.csv)"
+        )
+        if path:
+            self.import_csv(Path(path))
+
+    def import_csv(self, path: Path) -> None:
+        """Replay a previously exported CSV capture through the decoder.
+
+        Receive-only in spirit as well as in code: this never opens a
+        serial port or touches capture_service — it only re-decodes bytes
+        a capture already observed, offline, so a Profile's Format/Byte
+        Order/Multiplier can be tuned against real field data without
+        being connected to the device (see _decode_csv_capture for how
+        the replayed frames are reconstructed).
+        """
+        try:
+            frames, stats = self._decode_csv_capture(path)
+        except (OSError, ValueError) as error:
+            self._set_status_message(f"Could not play back capture: {error}", "warning")
+            return
+        if not frames:
+            self._set_status_message(
+                "No decodable frames found in that CSV.", "warning"
+            )
+            return
+
+        self.clear_messages()
+        self.message_table.setUpdatesEnabled(False)
+        try:
+            for frame in frames:
+                self.last_frame = frame
+                # Same signal a live frame emits — this is what lets the
+                # Profile tab's live register-decode logic run against a
+                # replayed capture exactly as it would against a real one.
+                self.frame_observed.emit(frame)
+                self._append_frame(frame, apply_filter=False)
+        finally:
+            self.message_table.setUpdatesEnabled(True)
+        self._apply_filter()
+        if self.auto_scroll.isChecked():
+            self.message_table.scrollToBottom()
+
+        self._on_statistics(stats)
+        skipped = stats.get("skipped", 0)
+        skipped_note = (
+            f" ({skipped} row(s) could not be re-decoded)" if skipped else ""
+        )
+        self._set_status_message(
+            f"Replaying imported capture — {len(frames)} frame(s), offline"
+            f"{skipped_note}. No serial port is open.",
+            "saved",
+        )
+
+    def _decode_csv_capture(self, path: Path) -> tuple[list[CapturedModbusFrame], dict]:
+        """Re-decode a previously exported CSV into full CapturedModbusFrame objects.
+
+        Uses the exact same stateful decoder live capture uses
+        (ModbusRTUDecoder), so a replayed frame's Direction/Frame Type/
+        values come out identical to what they'd have been read live off
+        the wire. Only the "Raw RTU Frame" column is actually needed —
+        everything else in the row is re-derived from those bytes, the
+        same source of truth live capture itself uses.
+
+        The CSV only stores each frame's time-of-day (see
+        CapturedModbusFrame.timestamp_text), not its date, so an absolute
+        timestamp isn't recoverable — what's fed to the decoder instead is
+        each row's seconds-since-midnight, kept strictly non-decreasing
+        across a midnight rollover. That preserves relative spacing
+        (needed for request/response matching and Packet Inspector's
+        "Response time") without fabricating a fake date.
+
+        Returns the decoded frames plus a live-capture-shaped statistics
+        dict (see PassiveSerialReaderThread._publish/_decode_and_publish)
+        so the footer counter can be updated exactly like a live
+        session's. A row whose bytes fail to decode (e.g. a "CRC Error"
+        row from the original capture — genuinely undecodable, since a
+        bad CRC carries no reliable Modbus semantics to replay) is
+        skipped rather than aborting the whole import; its own separate
+        "skipped" count is reported to the caller.
+        """
+        decoder = ModbusRTUDecoder()
+        frames: list[CapturedModbusFrame] = []
+        stats = {
+            "frames": 0,
+            "requests": 0,
+            "responses": 0,
+            "crc_errors": 0,
+            "unmatched": 0,
+            "skipped": 0,
+        }
+        previous_timestamp: float | None = None
+
+        with path.open("r", newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames or "Raw RTU Frame" not in reader.fieldnames:
+                raise ValueError('missing a "Raw RTU Frame" column')
+            for row in reader:
+                raw_hex = (row.get("Raw RTU Frame") or "").strip()
+                if not raw_hex:
+                    continue
+                try:
+                    raw_bytes = bytes.fromhex(raw_hex)
+                except ValueError:
+                    stats["skipped"] += 1
+                    continue
+                previous_timestamp = self._next_replay_timestamp(
+                    row.get("Timestamp", ""), previous_timestamp
+                )
+                try:
+                    frame = decoder.decode(raw_bytes, previous_timestamp)
+                except (IndexError, ValueError):
+                    stats["crc_errors"] += 1
+                    continue
+                stats["frames"] += 1
+                if frame.frame_type == "Request":
+                    stats["requests"] += 1
+                elif frame.frame_type in {"Response", "Exception response"}:
+                    stats["responses"] += 1
+                else:
+                    stats["unmatched"] += 1
+                frames.append(frame)
+        return frames, stats
+
+    @staticmethod
+    def _next_replay_timestamp(text: str, previous: float | None) -> float:
+        """Reconstruct a monotonic relative timestamp from a "HH:MM:SS.mmm" cell.
+
+        See _decode_csv_capture's docstring for why only relative spacing
+        (not an absolute date) is recoverable from the exported column.
+        """
+        try:
+            parsed = datetime.strptime(text.strip(), "%H:%M:%S.%f")
+        except ValueError:
+            return (previous or 0.0) + 0.001
+        seconds = (
+            parsed.hour * 3600
+            + parsed.minute * 60
+            + parsed.second
+            + parsed.microsecond / 1_000_000
+        )
+        if previous is not None:
+            while seconds < previous:
+                seconds += 86400
+        return seconds
 
     def shutdown(self, timeout_ms: int = 3_000) -> bool:
         return self.capture_service.shutdown(timeout_ms)

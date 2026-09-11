@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from plcsniffer.ui.main_window import MainWindow
 from plcsniffer.ui.log_viewer import LogViewerWidget
@@ -493,6 +493,251 @@ class PassiveSniffingWidgetTests(QtWidgetTestCase):
             self.assertEqual(slave_ids, [1])
         finally:
             self.close_widget(widget)
+
+
+class CsvPlaybackTests(QtWidgetTestCase):
+    """Export -> Playback CSV must reconstruct decoding exactly, offline.
+
+    "Exactly" is checked by re-decoding through the very same
+    ModbusRTUDecoder live capture uses, so these tests would also catch a
+    future change to the CSV export column set that broke the round trip.
+    """
+
+    def make_widget(self) -> PassiveSniffingWidget:
+        with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
+            return PassiveSniffingWidget()
+
+    def test_replays_a_request_response_pair_identically(self):
+        source = self.make_widget()
+        try:
+            request = request_frame(timestamp=1.0)
+            response = response_frame(timestamp=1.05)
+            source._on_frame(request)
+            source._on_frame(response)
+
+            with tempfile.TemporaryDirectory() as directory:
+                export_path = Path(directory) / "capture.csv"
+                source.export_csv(export_path)
+
+                replay = self.make_widget()
+                try:
+                    replay.import_csv(export_path)
+                    self.assertEqual(replay.message_table.rowCount(), 2)
+
+                    replayed_request = replay.message_table.item(0, 0).data(
+                        Qt.UserRole
+                    )
+                    replayed_response = replay.message_table.item(1, 0).data(
+                        Qt.UserRole
+                    )
+                    self.assertEqual(replayed_request.frame_type, "Request")
+                    self.assertEqual(replayed_response.frame_type, "Response")
+                    self.assertEqual(replayed_response.values, response.values)
+                    self.assertEqual(replayed_response.raw, response.raw)
+                    # Relative spacing (needed for request/response matching
+                    # and Packet Inspector's "Response time") survives the
+                    # round trip even though the absolute date does not.
+                    self.assertAlmostEqual(
+                        replayed_response.response_time_ms, 50.0, delta=1.0
+                    )
+                    self.assertEqual(
+                        replay.stats_label.text(),
+                        "Frames 2 · Requests 1 · Responses 1 · Errors 0",
+                    )
+                    self.assertIn("offline", replay.status_label.text().lower())
+                finally:
+                    self.close_widget(replay)
+        finally:
+            self.close_widget(source)
+
+    def test_replay_never_touches_capture_service(self):
+        """Receive-only in spirit as well as in code: playback must never
+        open a serial port or otherwise start a capture worker."""
+        source = self.make_widget()
+        try:
+            source._on_frame(request_frame())
+            source._on_frame(response_frame())
+            with tempfile.TemporaryDirectory() as directory:
+                export_path = Path(directory) / "capture.csv"
+                source.export_csv(export_path)
+
+                replay = self.make_widget()
+                try:
+                    replay.import_csv(export_path)
+                    self.assertIsNone(replay.capture_service.worker)
+                finally:
+                    self.close_widget(replay)
+        finally:
+            self.close_widget(source)
+
+    def test_import_replaces_existing_table_contents(self):
+        widget = self.make_widget()
+        try:
+            widget._on_frame(request_frame(slave_id=9, description="stale"))
+            self.assertEqual(widget.message_table.rowCount(), 1)
+
+            fresh_request = request_frame(timestamp=1.0)
+            fresh_response = response_frame(timestamp=1.05)
+            other = self.make_widget()
+            try:
+                other._on_frame(fresh_request)
+                other._on_frame(fresh_response)
+                with tempfile.TemporaryDirectory() as directory:
+                    export_path = Path(directory) / "capture.csv"
+                    other.export_csv(export_path)
+                    widget.import_csv(export_path)
+            finally:
+                self.close_widget(other)
+
+            self.assertEqual(widget.message_table.rowCount(), 2)
+            for row in range(widget.message_table.rowCount()):
+                self.assertNotEqual(
+                    widget.message_table.item(row, 2).text(), "9"
+                )
+        finally:
+            self.close_widget(widget)
+
+    def test_lone_crc_error_row_is_skipped_not_fatal(self):
+        """A "CRC Error" row from the original capture carries no reliable
+        Modbus semantics to replay -- it must be skipped, not abort the
+        whole playback or raise."""
+        widget = self.make_widget()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                csv_path = Path(directory) / "capture.csv"
+                with csv_path.open("w", newline="", encoding="utf-8-sig") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(
+                        [
+                            "Timestamp",
+                            "Direction",
+                            "Slave",
+                            "Function",
+                            "Frame Type",
+                            "Start Address",
+                            "Count",
+                            "Raw RTU Frame",
+                        ]
+                    )
+                    writer.writerow(
+                        [
+                            "10:00:00.000",
+                            "Unknown",
+                            "1",
+                            "—",
+                            "CRC Error",
+                            "—",
+                            "—",
+                            "01 03 04 00 00 FF FF",
+                        ]
+                    )
+                widget.import_csv(csv_path)
+                self.assertEqual(widget.message_table.rowCount(), 0)
+                self.assertIn(
+                    "No decodable frames", widget.status_label.text()
+                )
+        finally:
+            self.close_widget(widget)
+
+    def test_rejects_a_csv_missing_the_raw_frame_column(self):
+        widget = self.make_widget()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                csv_path = Path(directory) / "not_a_capture.csv"
+                with csv_path.open("w", newline="", encoding="utf-8-sig") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["Some", "Other", "Columns"])
+                    writer.writerow(["a", "b", "c"])
+                widget.import_csv(csv_path)
+                self.assertEqual(widget.message_table.rowCount(), 0)
+                self.assertIn(
+                    "Could not play back capture", widget.status_label.text()
+                )
+        finally:
+            self.close_widget(widget)
+
+    def test_dialog_asks_before_clearing_existing_data_and_declining_aborts(self):
+        widget = self.make_widget()
+        try:
+            widget._on_frame(request_frame())
+            with patch(
+                "plcsniffer.ui.passive_capture.QMessageBox.question",
+                return_value=QMessageBox.No,
+            ) as question, patch(
+                "plcsniffer.ui.passive_capture.QFileDialog.getOpenFileName"
+            ) as file_dialog:
+                widget.import_csv_dialog()
+            question.assert_called_once()
+            file_dialog.assert_not_called()
+            self.assertEqual(widget.message_table.rowCount(), 1)
+        finally:
+            self.close_widget(widget)
+
+    def test_dialog_skips_confirmation_when_table_is_already_empty(self):
+        widget = self.make_widget()
+        try:
+            self.assertEqual(widget.message_table.rowCount(), 0)
+            with patch(
+                "plcsniffer.ui.passive_capture.QMessageBox.question"
+            ) as question, patch(
+                "plcsniffer.ui.passive_capture.QFileDialog.getOpenFileName",
+                return_value=("", ""),
+            ) as file_dialog:
+                widget.import_csv_dialog()
+            question.assert_not_called()
+            file_dialog.assert_called_once()
+        finally:
+            self.close_widget(widget)
+
+    def test_playback_drives_profile_tab_live_decode_offline(self):
+        """The actual point of the feature: replaying a field capture must
+        update a Profile register's Parsed Value exactly like a live sniff
+        would, with no serial port ever opened -- so Format/Byte Order can
+        be tuned back at the office against real captured bytes."""
+        from plcsniffer.ui.profile_tab import ProfileTab
+
+        source = self.make_widget()
+        try:
+            source._on_frame(request_frame(address=100, quantity=2))
+            source._on_frame(
+                response_frame(address=100, values=(1234, 5678))
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                export_path = Path(directory) / "field_capture.csv"
+                source.export_csv(export_path)
+
+                with tempfile.TemporaryDirectory() as profile_dir, patch(
+                    "plcsniffer.ui.profile_tab.application_data_directory",
+                    return_value=Path(profile_dir),
+                ):
+                    replay = self.make_widget()
+                    profile_tab = ProfileTab()
+                    try:
+                        replay.frame_observed.connect(profile_tab.set_latest_frame)
+
+                        profile_tab.add_profile()
+                        profile = profile_tab._current_profile()
+                        slave = profile["slaves"][0]
+                        slave["slave_id"] = 1
+                        profile_tab.add_register()
+                        register = slave["registers"][0]
+                        register["address"] = 100
+                        register["function_code"] = 3
+                        profile_tab._populate_register_table(profile)
+
+                        replay.import_csv(export_path)
+
+                        self.assertEqual(register["raw_hex"], "0x04D2")
+                        self.assertEqual(register["parsed_value"], "1234")
+                        self.assertIsNone(replay.capture_service.worker)
+                        self.assertIsNone(profile_tab.sniff_capture_service.worker)
+                    finally:
+                        self.assertTrue(profile_tab.shutdown(100))
+                        profile_tab.close()
+                        profile_tab.deleteLater()
+                        self.close_widget(replay)
+        finally:
+            self.close_widget(source)
 
 
 class PacketInspectorTests(QtWidgetTestCase):

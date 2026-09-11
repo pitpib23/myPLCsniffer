@@ -159,6 +159,8 @@ class PassiveSniffingWidgetLiteModeTests(unittest.TestCase):
             self.assertTrue(hasattr(widget, "search"))
             self.assertTrue(hasattr(widget, "_double_click_tip_label"))
             self.assertFalse(hasattr(widget, "inspect_btn"))
+            # Playback CSV lives in the More▾ menu, full edition only.
+            self.assertTrue(hasattr(widget, "playback_action"))
         finally:
             widget.deleteLater()
             APP.processEvents()
@@ -177,9 +179,12 @@ class PassiveSniffingWidgetLiteModeTests(unittest.TestCase):
             self.assertTrue(hasattr(widget, "slave_filter"))
             self.assertTrue(hasattr(widget, "function_filter"))
             # No More▾ menu — Export CSV is a standalone button instead;
-            # Copy Selected (the menu's other action) is dropped entirely.
+            # Copy Selected and Playback CSV (the menu's other actions)
+            # are dropped entirely rather than each gaining their own
+            # button (full edition only, per product decision).
             self.assertFalse(hasattr(widget, "more_btn"))
             self.assertFalse(hasattr(widget, "copy_action"))
+            self.assertFalse(hasattr(widget, "playback_action"))
             self.assertTrue(hasattr(widget, "export_csv_btn"))
         finally:
             widget.deleteLater()
