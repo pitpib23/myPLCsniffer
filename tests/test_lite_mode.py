@@ -409,19 +409,14 @@ class ProfileTabLiteModeTests(unittest.TestCase):
             tab.deleteLater()
             APP.processEvents()
 
-    def test_lite_edition_defaults_to_showing_every_column(self) -> None:
-        """Lite shows all 13 register_table columns by default ("Show all
-        columns" starts checked); unchecking switches to a denser identity
-        + value only view (Name/Slave ID/Register/Parsed Value/Unit/
-        Status) — either way nothing is ever removed, only hidden."""
+    def test_lite_edition_defaults_to_identity_and_value_columns_only(self) -> None:
+        """Lite defaults to Name/Slave ID/Register/Parsed Value/Unit/Status
+        visible ("Show all columns" starts unchecked); checking it reveals
+        every column — either way nothing is ever removed, only hidden."""
         tab = self._make_tab(lite=True)
         try:
             self.assertEqual(tab.register_table.columnCount(), 13)
-            self.assertTrue(tab.show_all_columns_checkbox.isChecked())
-            for column in range(13):
-                self.assertFalse(tab.register_table.isColumnHidden(column))
-
-            tab.show_all_columns_checkbox.setChecked(False)
+            self.assertFalse(tab.show_all_columns_checkbox.isChecked())
             visible = {
                 column
                 for column in range(13)
@@ -432,6 +427,14 @@ class ProfileTabLiteModeTests(unittest.TestCase):
             tab.show_all_columns_checkbox.setChecked(True)
             for column in range(13):
                 self.assertFalse(tab.register_table.isColumnHidden(column))
+
+            tab.show_all_columns_checkbox.setChecked(False)
+            visible_again = {
+                column
+                for column in range(13)
+                if not tab.register_table.isColumnHidden(column)
+            }
+            self.assertEqual(visible_again, {0, 1, 5, 8, 9, 12})
         finally:
             tab.deleteLater()
             APP.processEvents()

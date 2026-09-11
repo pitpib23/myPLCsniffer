@@ -76,11 +76,12 @@ _DESCRIPTION_COLUMN = 10
 _TIMESTAMP_COLUMN = 11
 _STATUS_COLUMN = 12
 
-# Lite shows every register_table column by default ("Show all columns"
-# starts checked — see _build_table); unchecking it switches to identity +
-# value only (Name, Slave ID, Register, Parsed Value, Unit, Status), for
-# whoever prefers a denser view. Either way nothing is ever deleted, only
-# hidden — see _on_show_all_columns_toggled.
+# Lite's register_table defaults to identity + value only (Name, Slave
+# ID, Register, Parsed Value, Unit, Status) — "Show all columns" starts
+# unchecked (see _build_table); checking it reveals every column,
+# including whatever's needed to actually configure a register (Function
+# Code, Format, Byte Order, Multiplier). Either way nothing is ever
+# deleted, only hidden — see _on_show_all_columns_toggled.
 _LITE_HIDDEN_COLUMNS = (
     _FUNCTION_CODE_COLUMN,
     _FORMAT_COLUMN,
@@ -722,11 +723,11 @@ class ProfileTab(QWidget):
         row.addWidget(self.reset_filters_btn)
 
         if self._lite:
-            # Lite's register_table shows every column by default (checked
-            # here — see _build_table, which sets the initial state once
-            # register_table itself exists); unchecking switches to a
-            # denser identity + value only view (Name/Slave ID/Register/
-            # Parsed Value/Unit/Status — see _LITE_HIDDEN_COLUMNS).
+            # Lite's register_table defaults to identity + value only
+            # (Name/Slave ID/Register/Parsed Value/Unit/Status — see
+            # _LITE_HIDDEN_COLUMNS and _build_table, which sets the
+            # initial unchecked state once register_table itself exists);
+            # checking this reveals every column.
             self.show_all_columns_checkbox = QCheckBox("Show all columns")
             self.show_all_columns_checkbox.toggled.connect(
                 self._on_show_all_columns_toggled
@@ -879,12 +880,13 @@ class ProfileTab(QWidget):
         )
 
         if self._lite:
-            # Default to showing every column — checking the box here
-            # (built by _build_register_controls_row, which runs before
-            # this method, so it already exists) fires
-            # _on_show_all_columns_toggled(True) and keeps the checkbox's
-            # own displayed state in sync with the table.
-            self.show_all_columns_checkbox.setChecked(True)
+            # Default to identity + value only. The checkbox (built by
+            # _build_register_controls_row, which runs before this method,
+            # so it already exists) starts unchecked on its own — calling
+            # this directly rather than via setChecked(False) is what
+            # actually hides the non-essential columns, since a checkbox
+            # already at False wouldn't fire its own toggled signal.
+            self._on_show_all_columns_toggled(False)
 
         parent_layout.addWidget(self.register_table, stretch=1)
 
