@@ -545,3 +545,17 @@
 2026-08-28 11:39:38,252 | INFO | {"event": "application_opened"}
 2026-08-28 11:39:38,911 | INFO | {"event": "application_closed"}
 2026-08-28 11:44:13,096 | INFO | {"event": "application_opened"}
+2026-09-15 10:42:39,068 | INFO | {"event": "application_opened"}
+2026-09-15 10:42:42,316 | INFO | {"event": "application_closed"}
+2026-09-15 10:42:51,781 | INFO | {"event": "application_opened"}
+2026-09-15 10:43:17,934 | INFO | {"event": "capture_thread_start", "mode": "config", "port": "COM3"}
+2026-09-15 10:43:18,330 | ERROR | {"error": "could not open port 'COM3': OSError(22, 'Insufficient system resources exist to complete the requested service.', None, 1450)", "event": "serial_connection_failed", "port": "COM3"}
+2026-09-15 10:43:18,331 | INFO | {"event": "serial_port_closed", "port": "COM3"}
+2026-09-15 10:43:18,331 | ERROR | {"event": "capture_worker_error", "message": "Could not monitor COM3: could not open port 'COM3': OSError(22, 'Insufficient system resources exist to complete the requested service.', None, 1450). Close other serial programs and verify the adapter and permissions."}
+2026-09-15 10:43:18,339 | INFO | {"event": "capture_thread_stopped"}
+2026-09-15 10:43:19,484 | INFO | {"event": "capture_thread_start", "mode": "config", "port": "COM3"}
+2026-09-15 10:43:22,241 | ERROR | {"error": "could not open port 'COM3': OSError(22, 'Insufficient system resources exist to complete the requested service.', None, 1450)", "event": "serial_connection_failed", "port": "COM3"}
+2026-09-15 10:43:22,241 | INFO | {"event": "serial_port_closed", "port": "COM3"}
+2026-09-15 10:43:22,241 | ERROR | {"event": "capture_worker_error", "message": "Could not monitor COM3: could not open port 'COM3': OSError(22, 'Insufficient system resources exist to complete the requested service.', None, 1450). Close other serial programs and verify the adapter and permissions."}
+2026-09-15 10:43:22,246 | INFO | {"event": "capture_thread_stopped"}
+2026-09-15 10:43:29,927 | INFO | {"event": "application_closed"}

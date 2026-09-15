@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QScroller,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
@@ -520,12 +519,6 @@ class ProfileTab(QWidget):
         self.profile_list.setSpacing(2)
         if self._lite:
             self.profile_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-            QScroller.grabGesture(
-                self.profile_list.viewport(), QScroller.TouchGesture
-            )
-            QScroller.grabGesture(
-                self.profile_list.viewport(), QScroller.LeftMouseButtonGesture
-            )
         self.profile_list.setStyleSheet(
             """
             QListWidget {
@@ -831,9 +824,8 @@ class ProfileTab(QWidget):
             # One scrollable layer, not two: register_table gets NO
             # scrollbars of its own — it's sized to its full content (every
             # row, every visible column; see _fit_register_table_to_content)
-            # and the *outer* per-tab QScrollArea (MainWindow.
-            # _make_scrollable, which already grabs QScroller for drag-to-
-            # pan) is what reaches whatever doesn't fit the screen. A
+            # and the *outer* per-tab QScrollArea, routed by LiteScrollOwner,
+            # is what reaches whatever doesn't fit the screen. A
             # table-internal scrollbar/QScroller nested inside that outer
             # one made dragging ambiguous and janky — this tab now has
             # exactly one thing that scrolls. Description therefore also
@@ -2347,8 +2339,8 @@ class ProfileTab(QWidget):
         currently-visible column exactly, with no scrollbars of its own.
 
         One scrollable layer, not two: the *outer* per-tab QScrollArea
-        (MainWindow._make_scrollable) already grabs QScroller for drag-to-
-        pan — a table-internal scrollbar (plus its own QScroller) nested
+        is routed by LiteScrollOwner for drag-to-pan. An internal scrollbar
+        (plus the table's own QScroller) nested
         inside that outer one made dragging ambiguous and janky on a
         touchscreen. Called whenever row count or column visibility
         changes (populate/add/remove register, the "Show all columns"

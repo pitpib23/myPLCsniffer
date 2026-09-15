@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QMainWindow,
     QMessageBox,
-    QScroller,
     QScrollArea,
     QTabWidget,
     QWidget,
@@ -24,6 +23,7 @@ from plcsniffer.config import (
 from plcsniffer.logging_config import log_event
 from plcsniffer.modbus import CapturedModbusFrame
 from plcsniffer.ui.log_viewer import LogViewerWidget
+from plcsniffer.ui.lite_scroll import LiteScrollOwner
 from plcsniffer.ui.packet_inspector import PacketInspectorWidget
 from plcsniffer.ui.passive_capture import PassiveSniffingWidget
 from plcsniffer.ui.profile_tab import ProfileTab
@@ -235,6 +235,9 @@ class MainWindow(QMainWindow):
         self.profile_tab_widget = self._make_scrollable(self.profile_tab, lite=lite)
 
         if lite:
+            LiteScrollOwner.install(self, (
+                self.passive_tab, self.packet_inspector_tab, self.profile_tab_widget
+            ))
             # Short, touch-friendly labels, no numeric prefixes, and no
             # Logging tab in navigation — see the class docstring.
             self.tabs.addTab(self.passive_tab, "Sniff")
@@ -346,13 +349,8 @@ class MainWindow(QMainWindow):
 
         Args:
             content: Widget that owns the tab's controls and data tables.
-            lite: Grabs this scroll area's viewport for QScroller (Lite
-                only), so a whole tab whose content is taller/wider than
-                the screen (e.g. Sniff's Setup group pushing the message
-                table below an 800x480 viewport) can be dragged like a
-                phone screen, not just scrolled via the thin scrollbar.
-                See PassiveSniffingWidget/PacketInspectorWidget/ProfileTab
-                for the same treatment on their own inner tables.
+            lite: Retained for callers; the Lite shell installs one input
+                owner after all pages have been wrapped.
 
         Returns:
             Configured scroll-area container.
@@ -363,18 +361,6 @@ class MainWindow(QMainWindow):
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setWidget(content)
-        if lite:
-            # Both gesture types on the same viewport: TouchGesture covers
-            # a real multi-touch panel, LeftMouseButtonGesture covers a
-            # touchscreen whose driver reports single-touch as plain mouse
-            # events instead (common on Linux/X11 without a touch
-            # protocol registered) — either way, dragging pans like a
-            # phone screen. Full edition never grabs either, so desktop
-            # mouse drag-to-select is unaffected there.
-            QScroller.grabGesture(scroll_area.viewport(), QScroller.TouchGesture)
-            QScroller.grabGesture(
-                scroll_area.viewport(), QScroller.LeftMouseButtonGesture
-            )
         return scroll_area
 
     def inspect_packet(self, packet: CapturedModbusFrame) -> None:

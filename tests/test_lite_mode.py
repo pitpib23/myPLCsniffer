@@ -556,14 +556,13 @@ class ProfileSidebarToggleRegressionTests(unittest.TestCase):
 
 
 class DragToScrollTests(unittest.TestCase):
-    """Lite must be draggable like a phone screen — both when the touch
-    panel reports genuine multi-touch (QScroller.TouchGesture) and when it
-    reports single-touch as plain mouse events instead
-    (QScroller.LeftMouseButtonGesture), which is common on Linux/X11
-    without a touch protocol registered. Full edition must never grab
-    either, so desktop mouse drag-to-select stays exactly as it was."""
+    """Setup regressions; tests.test_lite_touch verifies actual movement.
 
-    def test_lite_grabs_both_gesture_types_on_every_scrollable_surface(self) -> None:
+    Lite routes native touch and mouse through one owner. Registering two
+    QScroller gestures did not enable both: Qt replaces the first grab.
+    """
+
+    def test_lite_uses_one_owner_without_competing_gesture_grabs(self) -> None:
         with patch.object(PassiveCaptureService, "available_ports", return_value=[]):
             window = MainWindow(lite=True)
         try:
@@ -575,11 +574,13 @@ class DragToScrollTests(unittest.TestCase):
                 window.packet_inspector.byte_table.viewport(),
                 window.profile_tab.profile_list.viewport(),
             ]
+            from PySide6.QtCore import Qt
+            from plcsniffer.ui.lite_scroll import LiteScrollOwner
+
+            self.assertEqual(len(window.findChildren(LiteScrollOwner)), 1)
             for surface in surfaces:
-                self.assertTrue(
-                    QScroller.hasScroller(surface),
-                    f"expected a QScroller grabbed on {surface!r}",
-                )
+                self.assertTrue(surface.testAttribute(Qt.WA_AcceptTouchEvents))
+                self.assertFalse(QScroller.hasScroller(surface))
         finally:
             window.close()
             window.deleteLater()

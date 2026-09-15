@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
-    QScroller,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -142,15 +141,6 @@ class PacketInspectorWidget(QWidget):
         self.byte_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         if self._lite:
             self.byte_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-            # Both gesture types (see PassiveSniffingWidget's message_table
-            # for the full reasoning): TouchGesture for a real multi-touch
-            # panel, LeftMouseButtonGesture for a touchscreen reporting as
-            # a mouse instead — either way, dragging pans like a phone
-            # screen.
-            QScroller.grabGesture(self.byte_table.viewport(), QScroller.TouchGesture)
-            QScroller.grabGesture(
-                self.byte_table.viewport(), QScroller.LeftMouseButtonGesture
-            )
         self.byte_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
         # Expanding in both directions (was Expanding/Fixed with a
         # setFixedHeight computed for up to 16 rows): this table now claims

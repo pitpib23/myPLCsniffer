@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QScroller,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -763,21 +762,6 @@ class PassiveSniffingWidget(QWidget):
             self.message_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             self.message_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
             self.message_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-            # Both gesture types: TouchGesture covers a real multi-touch
-            # panel, LeftMouseButtonGesture covers a touchscreen whose
-            # driver reports single-touch as plain mouse events instead
-            # (common on Linux/X11 without a touch protocol registered) —
-            # either way, dragging pans like a phone screen. A quick
-            # tap/click still selects normally (QScroller only takes over
-            # once the drag exceeds its small movement threshold); it's
-            # drag-to-multi-select specifically that becomes drag-to-pan
-            # instead, an acceptable trade on a touch-first tab.
-            QScroller.grabGesture(
-                self.message_table.viewport(), QScroller.TouchGesture
-            )
-            QScroller.grabGesture(
-                self.message_table.viewport(), QScroller.LeftMouseButtonGesture
-            )
             # Hidden, not deleted: the underlying frame data (and every
             # column's own item) is unaffected — Direction/Count just
             # don't consume screen space in Lite's default view. Frame
