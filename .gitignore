@@ -2,3 +2,5 @@
 build/
 dist/
 *.spec
+logs/
+.lite-runtime/

@@ -401,9 +401,10 @@
             "function_code": 3,
             "multiplier": 0.1,
             "name": "Humidity",
-            "parsed_value": "53.7",
-            "raw_hex": "0x0219",
-            "unit": "RH"
+            "parsed_value": "40.5",
+            "raw_hex": "0x0195",
+            "unit": "RH",
+            "raw_value": 405
           },
           {
             "address": 1,
@@ -411,9 +412,10 @@
             "function_code": 3,
             "multiplier": 0.1,
             "name": "Temperature",
-            "parsed_value": "27.3",
-            "raw_hex": "0x0111",
-            "unit": "C"
+            "parsed_value": "27.4",
+            "raw_hex": "0x0112",
+            "unit": "C",
+            "raw_value": 274
           }
         ]
       }

@@ -24,6 +24,7 @@ from plcsniffer.logging_config import log_event
 from plcsniffer.modbus import CapturedModbusFrame
 from plcsniffer.ui.log_viewer import LogViewerWidget
 from plcsniffer.ui.lite_scroll import LiteScrollOwner
+from plcsniffer.ui.lite_input import LiteInputMethodGuard
 from plcsniffer.ui.packet_inspector import PacketInspectorWidget
 from plcsniffer.ui.passive_capture import PassiveSniffingWidget
 from plcsniffer.ui.profile_tab import ProfileTab
@@ -238,6 +239,7 @@ class MainWindow(QMainWindow):
             LiteScrollOwner.install(self, (
                 self.passive_tab, self.packet_inspector_tab, self.profile_tab_widget
             ))
+            LiteInputMethodGuard.install(self)
             # Short, touch-friendly labels, no numeric prefixes, and no
             # Logging tab in navigation — see the class docstring.
             self.tabs.addTab(self.passive_tab, "Sniff")
